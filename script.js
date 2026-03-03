@@ -472,7 +472,11 @@ function isSessionExpired() {
   const user = currentUserRecord();
   if (!state.currentUser || !user) return false;
   if (user.enabled === false) return true;
-  const ref = Number(user.lastActivityAt || state.currentUser.lastActivityAt || state.currentUser.loginAt || 0);
+  const ref = Math.max(
+    Number(user.lastActivityAt || 0),
+    Number(state.currentUser.lastActivityAt || 0),
+    Number(state.currentUser.loginAt || 0)
+  );
   if (!ref) return false;
   return (Date.now() - ref) >= SESSION_INACTIVITY_LIMIT_MS;
 }
@@ -515,7 +519,11 @@ function validateSessionPolicy({ silent = false } = {}) {
     logout('Usuario inhabilitado por administrador.');
     return false;
   }
-  const last = Number(user.lastActivityAt || state.currentUser.lastActivityAt || state.currentUser.loginAt || 0);
+  const last = Math.max(
+    Number(user.lastActivityAt || 0),
+    Number(state.currentUser.lastActivityAt || 0),
+    Number(state.currentUser.loginAt || 0)
+  );
   if (last && (Date.now() - last) >= SESSION_INACTIVITY_LIMIT_MS) {
     user.lastLogoutAt = Date.now();
     saveLocalState();
@@ -1460,7 +1468,7 @@ function renderWarehouse() {
     return { html: `<tr class="${low ? 'selected-row' : ''}"><td>${c.name}</td><td>${linkedNames}</td><td>${linked.map((x) => x.qty).join(', ') || '-'}</td><td>${Number(c.qty || 0)}</td><td><button class="secondary" data-comp-edit="${c.id}" type="button">Editar</button> <button class="secondary" data-comp-del="${c.id}" type="button">Eliminar</button></td></tr>`, low };
   }).sort((a, b) => Number(b.low) - Number(a.low));
   warehouseTable.innerHTML = rows.length ? rows.map((x) => x.html).join('') : '<tr><td colspan="5">Sin componentes.</td></tr>';
-  if (warehouseMovesTable) warehouseMovesTable.innerHTML = (state.componentMoves || []).slice(0, 300).map((m) => `<tr><td>${new Date(m.fecha).toLocaleString()}</td><td>${m.componentName || '-'}</td><td>${m.tipo}</td><td>${Number(m.cantidad || 0)}</td><td>${m.usuario || '-'}</td><td>${m.descripcion || '-'}</td></tr>`).join('') || '<tr><td colspan="6">Sin movimientos.</td></tr>';
+  if (warehouseMovesTable) warehouseMovesTable.innerHTML = (state.componentMoves || []).filter(Boolean).slice(0, 300).map((m) => `<tr><td>${new Date(m.fecha || Date.now()).toLocaleString()}</td><td>${m.componentName || '-'}</td><td>${m.tipo || '-'}</td><td>${Number(m.cantidad || 0)}</td><td>${m.usuario || '-'}</td><td>${m.descripcion || '-'}</td></tr>`).join('') || '<tr><td colspan="6">Sin movimientos.</td></tr>';
 }
 
 function exportProductsToExcel() {
@@ -2187,6 +2195,11 @@ function renderOrdersVisibility() {
 }
 
 function showLogin() {
+  const user = currentUserRecord();
+  if (state.currentUser && user && user.enabled !== false && !isSessionExpired()) {
+    showHome();
+    return;
+  }
   loginScreen?.classList.remove('hidden');
   homeScreen?.classList.add('hidden');
   posScreen?.classList.add('hidden');
@@ -2240,6 +2253,8 @@ async function handleLogin() {
   if (loginPassInput) loginPassInput.value = '';
   setMsg(loginMessage, '');
   await pullFromCloud();
+  markUserActivity('login');
+  persist();
   maybeForceLogoutFromClosure();
   if (!state.currentUser) return;
   renderOrdersVisibility();
