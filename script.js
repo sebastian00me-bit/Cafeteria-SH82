@@ -9,11 +9,12 @@ const state = {
   settings: JSON.parse(localStorage.getItem('cafeteria_settings') || '{"title1":"Mi Cafetería","title2":"Pantalla principal","posTitle":"POS Cafetería","posSubtitle":"Ventas, productos, deudas, cierres y resumen diario.","logoDataUrl":"","accentColor":"#1f7a5c","bgColor":"#f7f7fb","cardColor":"#ffffff","logoSize":120,"title1Size":32,"title2Size":16,"title1Font":"Inter, system-ui, sans-serif","title2Font":"Inter, system-ui, sans-serif","title1Color":"#1d2530","title2Color":"#6f7a86","posLogoSize":56,"ordersEnabled":true}'),
   categories: JSON.parse(localStorage.getItem('cafeteria_categories') || '[]'),
   people: JSON.parse(localStorage.getItem('cafeteria_people') || '[]'),
-  stockConfig: JSON.parse(localStorage.getItem('cafeteria_stock_config') || '{"enabled":false,"min":0}')
+  stockConfig: JSON.parse(localStorage.getItem('cafeteria_stock_config') || '{"enabled":false,"min":0}'),
+  queuedOrders: JSON.parse(localStorage.getItem('cafeteria_queued_orders') || '[]')
 };
 
 let sessionWatchInterval = null;
-const SESSION_INACTIVITY_LIMIT_MS = 6 * 60 * 60 * 1000;
+const SESSION_INACTIVITY_LIMIT_MS = 3 * 60 * 60 * 1000;
 
 const $ = (id) => document.getElementById(id);
 const loginScreen = $('loginScreen');
@@ -374,6 +375,18 @@ function formatProductWithComboDetails(item) {
 function uid() { return `${Date.now()}_${Math.floor(Math.random() * 9999)}`; }
 function setMsg(el, txt, ok = true) { if (!el) return; el.textContent = txt; el.className = ok ? 'ok' : 'error'; }
 
+function refreshFinancialViews() {
+  renderSalesHistory();
+  renderDeletedSales();
+  renderDebtors();
+  renderDebtPayments();
+  renderSummary();
+  renderSoldProductsList();
+  renderCashStatus();
+  renderCashClosings();
+  renderOutflows();
+}
+
 function saveLocalState() {
   localStorage.setItem('cafeteria_last_sync_at', String(state.lastSyncAt || 0));
   localStorage.setItem('cafeteria_force_logout_at', String(state.forceLogoutAt || 0));
@@ -396,6 +409,7 @@ function saveLocalState() {
   localStorage.setItem('cafeteria_components', JSON.stringify(state.components || []));
   localStorage.setItem('cafeteria_component_links', JSON.stringify(state.componentLinks || {}));
   localStorage.setItem('cafeteria_component_moves', JSON.stringify(state.componentMoves || []));
+  localStorage.setItem('cafeteria_queued_orders', JSON.stringify(state.queuedOrders || []));
 }
 
 function persist(options = {}) {
@@ -513,6 +527,10 @@ function validateSessionPolicy({ silent = false } = {}) {
     logout('Sesión inválida. Vuelve a iniciar sesión.');
     return false;
   }
+  if (Number(state.forceLogoutAt || 0) && Number(state.currentUser.loginAt || 0) <= Number(state.forceLogoutAt || 0)) {
+    logout('La caja fue cerrada. Debes iniciar sesión nuevamente.');
+    return false;
+  }
   if (user.enabled === false) {
     user.lastLogoutAt = Date.now();
     saveLocalState();
@@ -527,7 +545,7 @@ function validateSessionPolicy({ silent = false } = {}) {
   if (last && (Date.now() - last) >= SESSION_INACTIVITY_LIMIT_MS) {
     user.lastLogoutAt = Date.now();
     saveLocalState();
-    logout('Sesión expirada por inactividad (6 horas).');
+    logout('Sesión expirada por inactividad (3 horas).');
     return false;
   }
   if (!silent) markUserActivity('request');
@@ -668,8 +686,11 @@ function renderSaleSelectors() {
       }
     }
     const e = state.currentCart.find((i) => i.id === p.id);
-    if (e) e.qty += q;
-    else state.currentCart.push({ id: p.id, name: p.name, price: Number(p.price || 0), qty: q, discountPct: 0, finalSubtotal: Number(p.price || 0) * q });
+    if (e) {
+      e.qty += q;
+      const total = Number(e.price || 0) * Number(e.qty || 0);
+      e.finalSubtotal = total - (total * Number(e.discountPct || 0) / 100);
+    } else state.currentCart.push({ id: p.id, name: p.name, price: Number(p.price || 0), qty: q, discountPct: 0, finalSubtotal: Number(p.price || 0) * q });
     activeSaleCategory = '';
     renderSaleSelectors();
     renderCart();
@@ -1054,12 +1075,11 @@ async function downloadClosingsStatsPdf() {
     doc.setFontSize(10);
     doc.text(`Cantidad de cierres seleccionados: ${st.count}`, 14, 34);
     doc.autoTable({ startY: 38, head: [['Resumen general', 'Valor']], body: [
-      ['Total ventas', String(st.salesCount)], ['Total ingresos', money(st.totalIncome)], ['Total efectivo', money(st.cash)], ['Total transferencias', money(st.transfer)], ['Total QR', money(st.qr)], ['Total gastos', money(st.expenses)], ['Ticket promedio global', money(st.avgTicket)], ['Total productos vendidos', String(st.productsTotalQty)]
+      ['Total ventas', String(st.salesCount)], ['Total ingresos', money(st.totalIncome)], ['Total efectivo', money(st.cash)], ['Total QR', money(st.qr)], ['Total gastos', money(st.expenses)], ['Ticket promedio global', money(st.avgTicket)], ['Total productos vendidos', String(st.productsTotalQty)]
     ] });
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['Producto', 'Cantidad', 'Total']], body: st.top5.map((p)=>[p.name,String(p.qty),money(p.total)]) });
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['Método de pago', 'Monto']], body: [
       ['Efectivo', `${money(st.cash)} (${st.paymentPct.cash.toFixed(1)}%)`],
-      ['Transferencia', `${money(st.transfer)} (${st.paymentPct.transfer.toFixed(1)}%)`],
       ['QR', `${money(st.qr)} (${st.paymentPct.qr.toFixed(1)}%)`],
       ['Otros', `${money(st.others)} (${st.paymentPct.others.toFixed(1)}%)`]
     ]});
@@ -1105,13 +1125,23 @@ function renderClosingDetails(closingId) {
   const sales = Array.isArray(closing.salesSnapshot) ? closing.salesSnapshot : state.sales.filter((sale) => (closing.salesIds || []).includes(sale.id));
   const openAt = new Date(closing.openedAt || closing.fecha_apertura || closing.closedAt);
   const closeAt = new Date(closing.closedAt);
-  const netIncome = Number(closing.cashIn || 0) + Number(closing.qrIn || 0) + Number(closing.transferIn || 0) + Number(closing.otherIn || 0);
-  const totalDiscounts = Number(closing.discountTotal || 0);
-  const expected = agg.expected;
-  const counted = agg.counted;
-  const diff = counted - expected;
-  const finalStatus = diff === 0 ? 'CUADRADO' : (diff > 0 ? 'SOBRANTE' : 'FALTANTE');
-  if (closingSummaryText) closingSummaryText.innerHTML = `<div class="card"><h4>SECCIÓN 1 – INFORMACIÓN GENERAL</h4><p>Número de cierre: ${String(closing.id || '-').slice(-8)}</p><p>Fecha de apertura: ${openAt.toLocaleDateString()}</p><p>Hora de apertura: ${openAt.toLocaleTimeString()}</p><p>Fecha de cierre: ${closeAt.toLocaleDateString()}</p><p>Hora de cierre: ${closeAt.toLocaleTimeString()}</p><p>Usuario que abrió: ${closing.usuario_apertura || '-'}</p><p>Usuario que cerró: ${closing.usuario_cierre || '-'}</p><p>Tiempo total de caja abierta: ${formatDurationMs(closeAt - openAt)}</p></div><div class="card"><h4>SECCIÓN 2 – RESUMEN FINANCIERO</h4><p>Monto inicial: ${money(closing.openingCash || 0)}</p><p>Total ventas brutas: ${money(netIncome)}</p><p>Total descuentos: ${money(totalDiscounts)}</p><p>Total ingresos netos: ${money(netIncome - totalDiscounts)}</p><p>Total efectivo: ${money(agg.cash)}</p><p>Total transferencias: ${money(agg.transfer)}</p><p>Total QR: ${money(agg.qr)}</p><p>Otros métodos: ${money(agg.others)}</p><p>Total gastos: ${money(agg.outTotal)}</p><p>Total esperado: ${money(expected)}</p><p>Total contado: ${money(counted)}</p><p>Diferencia: ${money(diff)}</p><p><strong>Estado final: ${finalStatus}</strong></p></div><div class="card"><h4>SECCIÓN 3 – MÉTRICAS OPERATIVAS</h4><p>Cantidad total de ventas: ${closing.salesCount || sales.length}</p><p>Total productos vendidos: ${agg.qtyTotal}</p><p>Ticket promedio: ${money(agg.avgTicket)}</p><p>Venta más alta: ${money(agg.saleMax)}</p><p>Venta más baja: ${money(agg.saleMin)}</p><p>Ventas eliminadas: ${deletedCount} · Mov. caja: ${outflowCount} · Pagos deuda: ${debtPaymentsCount}</p></div><div class="card"><h4>SECCIÓN 5 – MÉTODOS DE PAGO</h4><p>Efectivo: ${money(agg.cash)} (${((agg.cash/Math.max(1, agg.net))*100).toFixed(1)}%)</p><p>Transferencia: ${money(agg.transfer)} (${((agg.transfer/Math.max(1, agg.net))*100).toFixed(1)}%)</p><p>QR: ${money(agg.qr)} (${((agg.qr/Math.max(1, agg.net))*100).toFixed(1)}%)</p><p>Otros: ${money(agg.others)} (${((agg.others/Math.max(1, agg.net))*100).toFixed(1)}%)</p></div>`;
+  const grossSales = sales.reduce((sum, sale) => sum + (sale.items || []).reduce((a, it) => a + Number(it.price || 0) * Number(it.qty || 0), 0), 0);
+  const totalDiscounts = sales.reduce((sum, sale) => sum + (sale.items || []).reduce((a, it) => {
+    const gross = Number(it.price || 0) * Number(it.qty || 0);
+    const final = Number(it.finalSubtotal ?? gross);
+    return a + Math.max(0, gross - final);
+  }, 0), 0);
+  const debtPayments = Array.isArray(closing.debtPaymentsSnapshot) ? closing.debtPaymentsSnapshot.filter((p) => !p?.anulado) : [];
+  const debtCash = debtPayments.reduce((a, p) => a + Number(p.cashAmount || (p.method === 'efectivo' ? p.amount : 0) || 0), 0);
+  const debtQr = debtPayments.reduce((a, p) => a + Number(p.qrAmount || (p.method === 'qr' ? p.amount : 0) || 0), 0);
+  const totalCash = Number(closing.cashIn || 0) + debtCash;
+  const totalQr = Number(closing.qrIn || 0) + debtQr;
+  const totalOutflows = outCash + outQr;
+  const totalInflows = inCash + inQr;
+  const openingCash = Number(closing.openingCash || 0);
+  const totalInBox = openingCash + totalCash - totalOutflows + totalInflows;
+  const realDelivered = totalInBox - openingCash;
+  if (closingSummaryText) closingSummaryText.innerHTML = `<div class="card"><h4>SECCIÓN 1 – INFORMACIÓN GENERAL</h4><p>Número de cierre: ${String(closing.id || '-').slice(-8)}</p><p>Fecha de apertura: ${openAt.toLocaleDateString()}</p><p>Hora de apertura: ${openAt.toLocaleTimeString()}</p><p>Fecha de cierre: ${closeAt.toLocaleDateString()}</p><p>Hora de cierre: ${closeAt.toLocaleTimeString()}</p><p>Usuario que abrió: ${closing.usuario_apertura || '-'}</p><p>Usuario que cerró: ${closing.usuario_cierre || '-'}</p><p>Tiempo total de caja abierta: ${formatDurationMs(closeAt - openAt)}</p></div><div class="card"><h4>SECCIÓN 2 – RESUMEN FINANCIERO</h4><p>Inicio de caja: ${money(openingCash)}</p><p>Total ventas brutas: ${money(grossSales)}</p><p>Total descuentos: ${money(totalDiscounts)}</p><p>Total ingresos netos: ${money(grossSales - totalDiscounts)}</p><p>Total en efectivo: ${money(totalCash)}</p><p>Total QR: ${money(totalQr)}</p><p>Total salidas de caja: ${money(totalOutflows)}</p><p>Total salidas externas: ${money(totalOutflows)}</p><p>Total entradas externas: ${money(totalInflows)}</p><p>Valor total en caja (incluye valor de caja): ${money(totalInBox)}</p><p>Valor efectivo real entregado: ${money(realDelivered)}</p></div><div class="card"><h4>SECCIÓN 3 – MÉTRICAS OPERATIVAS</h4><p>Cantidad total de ventas: ${closing.salesCount || sales.length}</p><p>Total productos vendidos: ${agg.qtyTotal}</p><p>Ticket promedio: ${money(agg.avgTicket)}</p><p>Venta más alta: ${money(agg.saleMax)}</p><p>Venta más baja: ${money(agg.saleMin)}</p><p>Ventas eliminadas: ${deletedCount} · Mov. caja: ${outflowCount} · Pagos deuda: ${debtPaymentsCount}</p></div>`;
   if (closingSalesTable) closingSalesTable.innerHTML = sales.length ? sales.map((sale) => `<tr><td>${new Date(sale.createdAt).toLocaleString()}</td><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${sale.payment}</td><td>${money(sale.total)}</td><td>${sale.user}</td></tr>`).join('') : '<tr><td colspan="5">Sin ventas.</td></tr>';
   if (closingProductsTable) {
     const aggProducts = agg.products;
@@ -2595,17 +2625,13 @@ function closeCashSession() {
   state.systemStatus = 'CAJA_CERRADA';
   state.cashSession = null;
   state.forceLogoutAt = Date.now();
+  state.users = (state.users || []).map((u) => ({ ...u, lastLogoutAt: state.forceLogoutAt }));
   persist();
 
   renderHomeActions();
   renderTabsByPermissions();
-  renderCashStatus();
-  renderCashClosings();
-  renderSummary();
-  renderSoldProductsList();
   renderOrders(false);
-  renderSalesHistory();
-  renderDebtors();
+  refreshFinancialViews();
   if (cashCloseResult) {
     cashCloseResult.className = 'ok';
     cashCloseResult.textContent = `Cierre digital realizado: Ventas ${money(activeCash.resumen.total_ventas)} · Transacciones ${activeCash.resumen.total_transacciones}.`;
@@ -2700,15 +2726,70 @@ async function registerSale() {
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
-  renderDebtors();
-  renderSummary();
-  renderSoldProductsList();
+  refreshFinancialViews();
   renderWarehouse();
   if (saleSuccessTitle) saleSuccessTitle.textContent = `Venta realizada exitosamente · Pedido #${orderNumberLabel(sale.orderNumber)}`;
   saleSuccessModal?.classList.remove('hidden');
 }
 
 function hideSaleSuccessModal() { saleSuccessModal?.classList.add('hidden'); saleFormContainer?.classList.add('hidden'); state.currentCart = []; activeSaleCategory=''; if (paymentType) paymentType.value='efectivo'; cashPaymentFields?.classList.remove('hidden'); if (cashPaidInput) cashPaidInput.value=''; mixedFields?.classList.add('hidden'); debtFields?.classList.add('hidden'); partialFields?.classList.add('hidden'); renderCart(); renderSaleSelectors(); }
+
+function ensureQueuedOrderButtons() {
+  if (!saleFormContainer || document.getElementById('queueSaleBtn')) return;
+  const createBtn = document.getElementById('createSale');
+  if (!createBtn) return;
+  const wrap = document.createElement('div');
+  wrap.id = 'queuedOrderActions';
+  wrap.className = 'grid3';
+  wrap.innerHTML = '<button id="queueSaleBtn" class="secondary" type="button">Añadir a la cola</button><button id="viewQueuedOrdersBtn" class="secondary" type="button">Ver pedidos pendientes</button>';
+  createBtn.insertAdjacentElement('afterend', wrap);
+  document.getElementById('queueSaleBtn')?.addEventListener('click', queueCurrentSaleDraft);
+  document.getElementById('viewQueuedOrdersBtn')?.addEventListener('click', openQueuedOrdersModal);
+}
+
+function queueCurrentSaleDraft() {
+  if (!state.currentCart?.length) return setMsg(saleMessage, 'No hay productos para guardar en cola.', false);
+  state.queuedOrders = Array.isArray(state.queuedOrders) ? state.queuedOrders : [];
+  state.queuedOrders.unshift({
+    id: uid(),
+    createdAt: new Date().toISOString(),
+    items: state.currentCart.map((i) => ({ ...i }))
+  });
+  state.currentCart = [];
+  persist();
+  renderCart();
+  setMsg(saleMessage, 'Pedido enviado a la cola correctamente.');
+}
+
+function openQueuedOrdersModal() {
+  document.getElementById('queuedOrdersOverlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'queuedOrdersOverlay';
+  overlay.className = 'modal';
+  const rows = (state.queuedOrders || []).map((q) => `<tr><td>${q.items.map((i) => `${i.name} x${i.qty}`).join(', ') || '-'}</td><td><button class="secondary" data-queue-resume="${q.id}" type="button">Retomar pedido</button> <button class="danger" data-queue-del="${q.id}" type="button">Eliminar pedido</button></td></tr>`).join('') || '<tr><td colspan="2">Sin pedidos en cola.</td></tr>';
+  overlay.innerHTML = `<div class="modal-card"><h3>Pedidos pendientes</h3><table><thead><tr><th>Lista</th><th>Acción</th></tr></thead><tbody id="queuedOrdersTable">${rows}</tbody></table><button id="closeQueuedOrdersBtn" class="secondary" type="button">Cerrar</button></div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('closeQueuedOrdersBtn')?.addEventListener('click', () => overlay.remove());
+  document.getElementById('queuedOrdersTable')?.addEventListener('click', (e) => {
+    const resume = e.target.closest('button[data-queue-resume]');
+    if (resume) {
+      const q = (state.queuedOrders || []).find((x) => x.id === resume.dataset.queueResume);
+      if (!q) return;
+      state.currentCart = (q.items || []).map((i) => ({ ...i }));
+      state.queuedOrders = (state.queuedOrders || []).filter((x) => x.id !== q.id);
+      persist();
+      renderCart();
+      renderSaleSelectors();
+      overlay.remove();
+      return;
+    }
+    const del = e.target.closest('button[data-queue-del]');
+    if (!del) return;
+    state.queuedOrders = (state.queuedOrders || []).filter((x) => x.id !== del.dataset.queueDel);
+    persist();
+    openQueuedOrdersModal();
+  });
+}
 
 function renderStockPage() {
   if (!stockPageTable) return;
@@ -3182,6 +3263,7 @@ function wireEvents() {
     if (debtorSelect) debtorSelect.value = '';
     if (partialPersonSelect) partialPersonSelect.value = '';
     saleFormContainer?.classList.remove('hidden');
+    ensureQueuedOrderButtons();
     cashPaymentFields?.classList.remove('hidden');
     if (cashPaidInput) cashPaidInput.value = '';
     mixedFields?.classList.add('hidden');
@@ -3393,18 +3475,14 @@ function wireEvents() {
     if (outflowAmount) outflowAmount.value = '';
     if (outflowDescription) outflowDescription.value = '';
     persist();
-    renderOutflows();
-    renderSummary();
-  renderSoldProductsList();
+    refreshFinancialViews();
   });
   outflowsTable?.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-out-del]');
     if (!b) return;
     state.outflows = state.outflows.filter((o) => o.id !== b.dataset.outDel);
     persist();
-    renderOutflows();
-    renderSummary();
-  renderSoldProductsList();
+    refreshFinancialViews();
   });
   createSaleBtn?.addEventListener('click', registerSale);
   saleSuccessContinueBtn?.addEventListener('click', hideSaleSuccessModal);
@@ -3498,12 +3576,7 @@ function wireEvents() {
       applyWarehouseImpactFromSaleItems(sale.items, { reverse: true, saleId: `#${orderNumberLabel(sale.orderNumber)}` });
       state.sales = state.sales.filter((x) => x.id !== sale.id);
       persist();
-      renderSalesHistory();
-      renderDeletedSales();
-      renderDebtors();
-      renderDebtPayments();
-      renderSummary();
-      renderSoldProductsList();
+      refreshFinancialViews();
       renderWarehouse();
       return;
     }
