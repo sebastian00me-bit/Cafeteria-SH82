@@ -932,6 +932,19 @@ function renderImageUploadProgress(kind, key) {
   return `<div class="upload-progress-wrap"><div class="upload-progress-label">Subiendo... ${pct}%</div><div class="upload-progress"><span style="width:${pct}%"></span></div></div>`;
 }
 
+
+function persistImageChange(onRollback) {
+  try {
+    persist();
+    return true;
+  } catch (error) {
+    if (typeof onRollback === 'function') onRollback();
+    console.error('[image-upload] persist error', error);
+    setMsg(homeMessage, 'No se pudo guardar la imagen. Intenta con una imagen más ligera.', false);
+    return false;
+  }
+}
+
 function beginImageUpload(kind, key, file, onDone) {
   const validationError = validateImageFile(file);
   if (validationError) {
@@ -974,8 +987,13 @@ function openImageUploadForProduct(productId) {
   input.addEventListener('change', () => {
     const f = input.files?.[0];
     beginImageUpload('product', productId, f, (dataUrl) => {
+      const previous = p.imageDataUrl;
       p.imageDataUrl = dataUrl;
-      persist();
+      const ok = persistImageChange(() => { p.imageDataUrl = previous; });
+      if (!ok) {
+        setImageUploadStatus('product', productId, { uploading: false, progress: 0, error: 'No se pudo guardar la imagen de forma persistente.' });
+        setTimeout(() => setImageUploadStatus('product', productId, null), 2400);
+      }
       renderProducts();
       renderSaleSelectors();
       renderTouchSaleUi();
@@ -992,8 +1010,16 @@ function openImageUploadForCategory(categoryName) {
   input.addEventListener('change', () => {
     const f = input.files?.[0];
     beginImageUpload('category', categoryName, f, (dataUrl) => {
+      const previous = state.categoryImages[categoryName] || '';
       state.categoryImages[categoryName] = dataUrl;
-      persist();
+      const ok = persistImageChange(() => {
+        if (previous) state.categoryImages[categoryName] = previous;
+        else delete state.categoryImages[categoryName];
+      });
+      if (!ok) {
+        setImageUploadStatus('category', categoryName, { uploading: false, progress: 0, error: 'No se pudo guardar la imagen de forma persistente.' });
+        setTimeout(() => setImageUploadStatus('category', categoryName, null), 2400);
+      }
       renderProducts();
       renderTouchSaleUi();
     });
@@ -3816,8 +3842,10 @@ function wireEvents() {
     if (delImg) {
       const p = state.products.find((x) => x.id === delImg.dataset.prodImgDel);
       if (!p) return;
+      const previous = p.imageDataUrl;
       delete p.imageDataUrl;
-      persist();
+      const ok = persistImageChange(() => { p.imageDataUrl = previous; });
+      if (!ok) return;
       renderProducts();
       renderTouchSaleUi();
       return;
@@ -3834,7 +3862,7 @@ function wireEvents() {
     const imgBtn = e.target.closest('button[data-cat-img]');
     if (imgBtn) { openImageUploadForCategory(imgBtn.dataset.catImg); return; }
     const imgDelBtn = e.target.closest('button[data-cat-img-del]');
-    if (imgDelBtn) { delete state.categoryImages[imgDelBtn.dataset.catImgDel || '']; persist(); renderProducts(); renderTouchSaleUi(); return; }
+    if (imgDelBtn) { const key = imgDelBtn.dataset.catImgDel || ''; const previous = state.categoryImages[key] || ''; delete state.categoryImages[key]; const ok = persistImageChange(() => { if (previous) state.categoryImages[key] = previous; }); if (!ok) return; renderProducts(); renderTouchSaleUi(); return; }
     const b = e.target.closest('button[data-cat-del]');
     if (!b) return;
     const cat = b.dataset.catDel;
