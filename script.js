@@ -25,6 +25,8 @@ const IMAGE_DB_NAME = 'cafeteria_images_db';
 const IMAGE_DB_STORE = 'images';
 const imagePreviewCache = {};
 const imageLoadInFlight = {};
+let imageDbPromise = null;
+let scheduledImageUiRefresh = 0;
 
 const $ = (id) => document.getElementById(id);
 const loginScreen = $('loginScreen');
@@ -905,15 +907,24 @@ function syncSaleUiModeVisibility() {
 }
 
 function openImageDb() {
-  return new Promise((resolve, reject) => {
+  if (imageDbPromise) return imageDbPromise;
+  imageDbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(IMAGE_DB_NAME, 1);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(IMAGE_DB_STORE)) db.createObjectStore(IMAGE_DB_STORE);
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error || new Error('No se pudo abrir IndexedDB de imágenes.'));
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onclose = () => { imageDbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => {
+      imageDbPromise = null;
+      reject(req.error || new Error('No se pudo abrir IndexedDB de imágenes.'));
+    };
   });
+  return imageDbPromise;
 }
 
 async function imageDbPut(key, blob) {
@@ -924,7 +935,6 @@ async function imageDbPut(key, blob) {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error || new Error('Error guardando imagen en IndexedDB.'));
   });
-  db.close();
 }
 
 async function imageDbGet(key) {
@@ -935,7 +945,6 @@ async function imageDbGet(key) {
     req.onsuccess = () => resolve(req.result || null);
     req.onerror = () => reject(req.error || new Error('Error leyendo imagen de IndexedDB.'));
   });
-  db.close();
   return out;
 }
 
@@ -948,7 +957,15 @@ async function imageDbDelete(key) {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error || new Error('Error eliminando imagen de IndexedDB.'));
   });
-  db.close();
+}
+
+function scheduleImageUiRefresh({ products = false, touch = false } = {}) {
+  if (scheduledImageUiRefresh) return;
+  scheduledImageUiRefresh = window.requestAnimationFrame(() => {
+    scheduledImageUiRefresh = 0;
+    if (products && productListCard && !productListCard.classList.contains('hidden')) renderProducts();
+    if (touch && currentSalesMode() === 'touch') renderTouchSaleUi();
+  });
 }
 
 function imageRefKey(value) {
@@ -968,8 +985,7 @@ function resolveImageSource(value) {
       } catch {}
       finally {
         delete imageLoadInFlight[raw];
-        renderProducts();
-        renderTouchSaleUi();
+        scheduleImageUiRefresh({ products: true, touch: true });
       }
     })();
   }
@@ -1004,7 +1020,7 @@ function setImageUploadStatus(kind, key, patch = null) {
     map[imageUploadKey(kind, key)] = { ...prev, ...patch };
   }
   imageUploadStatus[kind] = map;
-  renderProducts();
+  scheduleImageUiRefresh({ products: true });
 }
 
 function getImageUploadStatus(kind, key) {
