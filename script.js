@@ -997,12 +997,6 @@ function resolveImageSource(value) {
 
 async function saveImageFileToStorage(file, previousValue = '') {
   const ref = `idb:${uid()}`;
-  const dataUrl = await new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result || ''));
-    r.onerror = () => reject(r.error || new Error('No se pudo leer la imagen.'));
-    r.readAsDataURL(file);
-  });
   await imageDbPut(ref.slice(4), file);
   imagePreviewCache[ref] = URL.createObjectURL(file);
   const prevKey = imageRefKey(previousValue);
@@ -1013,7 +1007,7 @@ async function saveImageFileToStorage(file, previousValue = '') {
       delete imagePreviewCache[previousValue];
     }
   }
-  return dataUrl;
+  return ref;
 }
 
 function imageUploadKey(kind, key) {
