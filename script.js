@@ -19,7 +19,7 @@ const state = {
 
 let sessionWatchInterval = null;
 const SESSION_INACTIVITY_LIMIT_MS = 3 * 60 * 60 * 1000;
-const MAX_IMAGE_UPLOAD_BYTES = 80 * 1024 * 1024;
+const MAX_IMAGE_UPLOAD_BYTES = Number.POSITIVE_INFINITY;
 const imageUploadStatus = { product: {}, category: {} };
 const IMAGE_DB_NAME = 'cafeteria_images_db';
 const IMAGE_DB_STORE = 'images';
@@ -1043,7 +1043,6 @@ function validateImageFile(file) {
   const extOk = /\.(jpg|jpeg|png)$/.test(name);
   const mimeOk = ['image/jpeg', 'image/jpg', 'image/png', 'image/pjpeg'].includes(type) || type.startsWith('image/');
   if (!(extOk || mimeOk)) return 'Archivo inválido. Solo se permiten JPG, JPEG y PNG.';
-  if (Number(file.size || 0) > MAX_IMAGE_UPLOAD_BYTES) return 'La imagen supera el límite permitido de 80 MB por archivo.';
   return '';
 }
 
