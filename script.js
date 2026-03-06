@@ -19,6 +19,8 @@ const state = {
 
 let sessionWatchInterval = null;
 const SESSION_INACTIVITY_LIMIT_MS = 3 * 60 * 60 * 1000;
+const MAX_IMAGE_UPLOAD_BYTES = 16 * 1024 * 1024;
+const imageUploadStatus = { product: {}, category: {} };
 
 const $ = (id) => document.getElementById(id);
 const loginScreen = $('loginScreen');
@@ -896,6 +898,73 @@ function syncSaleUiModeVisibility() {
   setSaleModeDomVisibility();
 }
 
+function imageUploadKey(kind, key) {
+  return `${kind}:${String(key || '')}`;
+}
+
+function setImageUploadStatus(kind, key, patch = null) {
+  const map = imageUploadStatus[kind] || {};
+  if (!patch) {
+    delete map[imageUploadKey(kind, key)];
+  } else {
+    const prev = map[imageUploadKey(kind, key)] || {};
+    map[imageUploadKey(kind, key)] = { ...prev, ...patch };
+  }
+  imageUploadStatus[kind] = map;
+  renderProducts();
+}
+
+function getImageUploadStatus(kind, key) {
+  return imageUploadStatus[kind]?.[imageUploadKey(kind, key)] || null;
+}
+
+function validateImageFile(file) {
+  if (!file) return 'No se seleccionó archivo.';
+  if (!String(file.type || '').startsWith('image/')) return 'Archivo inválido. Selecciona una imagen.';
+  if (Number(file.size || 0) > MAX_IMAGE_UPLOAD_BYTES) return 'La imagen supera el límite permitido de 16 MB.';
+  return '';
+}
+
+function renderImageUploadProgress(kind, key) {
+  const st = getImageUploadStatus(kind, key);
+  if (!st || !st.uploading) return '';
+  const pct = Math.max(0, Math.min(100, Math.round(Number(st.progress || 0))));
+  return `<div class="upload-progress-wrap"><div class="upload-progress-label">Subiendo... ${pct}%</div><div class="upload-progress"><span style="width:${pct}%"></span></div></div>`;
+}
+
+function beginImageUpload(kind, key, file, onDone) {
+  const validationError = validateImageFile(file);
+  if (validationError) {
+    setImageUploadStatus(kind, key, { uploading: false, progress: 0, error: validationError });
+    setTimeout(() => setImageUploadStatus(kind, key, null), 2200);
+    setMsg(homeMessage, validationError, false);
+    return;
+  }
+  const startedAt = Date.now();
+  setImageUploadStatus(kind, key, { uploading: true, progress: 2, error: '' });
+  const reader = new FileReader();
+  reader.onprogress = (event) => {
+    if (!event.lengthComputable) return;
+    const pct = Math.max(2, Math.min(95, Math.round((event.loaded / event.total) * 100)));
+    setImageUploadStatus(kind, key, { uploading: true, progress: pct, error: '' });
+  };
+  reader.onerror = () => {
+    setImageUploadStatus(kind, key, { uploading: false, progress: 0, error: 'No se pudo cargar la imagen.' });
+    setTimeout(() => setImageUploadStatus(kind, key, null), 2200);
+  };
+  reader.onload = () => {
+    const finish = () => {
+      try { onDone(String(reader.result || '')); }
+      finally { setImageUploadStatus(kind, key, null); }
+    };
+    const elapsed = Date.now() - startedAt;
+    const waitMs = Math.max(0, 800 - elapsed);
+    setImageUploadStatus(kind, key, { uploading: true, progress: 100, error: '' });
+    setTimeout(finish, waitMs);
+  };
+  reader.readAsDataURL(file);
+}
+
 function openImageUploadForProduct(productId) {
   const p = state.products.find((x) => x.id === productId);
   if (!p) return;
@@ -904,10 +973,13 @@ function openImageUploadForProduct(productId) {
   input.accept = 'image/*';
   input.addEventListener('change', () => {
     const f = input.files?.[0];
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => { p.imageDataUrl = String(reader.result || ''); persist(); renderProducts(); renderSaleSelectors(); renderTouchSaleUi(); };
-    reader.readAsDataURL(f);
+    beginImageUpload('product', productId, f, (dataUrl) => {
+      p.imageDataUrl = dataUrl;
+      persist();
+      renderProducts();
+      renderSaleSelectors();
+      renderTouchSaleUi();
+    });
   });
   input.click();
 }
@@ -919,10 +991,12 @@ function openImageUploadForCategory(categoryName) {
   input.accept = 'image/*';
   input.addEventListener('change', () => {
     const f = input.files?.[0];
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => { state.categoryImages[categoryName] = String(reader.result || ''); persist(); renderProducts(); renderTouchSaleUi(); };
-    reader.readAsDataURL(f);
+    beginImageUpload('category', categoryName, f, (dataUrl) => {
+      state.categoryImages[categoryName] = dataUrl;
+      persist();
+      renderProducts();
+      renderTouchSaleUi();
+    });
   });
   input.click();
 }
@@ -2079,8 +2153,8 @@ function renderProducts() {
   if (productsHead) productsHead.innerHTML = '<th>Categoría</th><th>Producto</th><th>Precio</th><th>Acciones</th><th>Imagen</th>';
   const categoriesHead = categoriesTable?.closest('table')?.querySelector('thead tr');
   if (categoriesHead) categoriesHead.innerHTML = '<th>Categoría</th><th>Acciones</th><th>Imagen</th>';
-  if (productsTable) productsTable.innerHTML = sorted.map((p) => `<tr><td>${p.category || '-'}</td><td>${p.name}</td><td>${money(p.price)}</td><td><button class=\"secondary\" data-prod-edit=\"${p.id}\" type=\"button\">Editar</button> <button class=\"secondary\" data-prod-img=\"${p.id}\" type=\"button\">Subir imagen</button> <button class=\"secondary\" data-prod-hide=\"${p.id}\" type=\"button\">${p.hidden ? 'Mostrar' : 'Ocultar'}</button> <button class=\"secondary\" data-prod-del=\"${p.id}\" type=\"button\">Eliminar</button></td><td>${p.imageDataUrl ? `<div class=\"image-cell\"><img class=\"image-thumb\" src=\"${p.imageDataUrl}\" alt=\"${p.name}\" /><button class=\"danger\" data-prod-img-del=\"${p.id}\" type=\"button\">X</button></div>` : '<span class=\"muted\">Sin imagen</span>'}</td></tr>`).join('');
-  if (categoriesTable) categoriesTable.innerHTML = (state.categories || []).map((c) => `<tr><td>${c}</td><td>${c === 'Todos' ? '-' : `<button class=\"secondary\" data-cat-img=\"${c}\" type=\"button\">Subir imagen</button> <button class=\"secondary\" data-cat-del=\"${c}\" type=\"button\">Eliminar</button>`}</td><td>${state.categoryImages?.[c] ? `<div class=\"image-cell\"><img class=\"image-thumb\" src=\"${state.categoryImages[c]}\" alt=\"${c}\" /><button class=\"danger\" data-cat-img-del=\"${c}\" type=\"button\">X</button></div>` : '<span class=\"muted\">Sin imagen</span>'}</td></tr>`).join('');
+  if (productsTable) productsTable.innerHTML = sorted.map((p) => { const st = getImageUploadStatus('product', p.id); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const imageBlock = p.imageDataUrl ? `<div class=\"image-cell\"><img class=\"image-thumb\" src=\"${p.imageDataUrl}\" alt=\"${p.name}\" /><button class=\"danger\" data-prod-img-del=\"${p.id}\" type=\"button\">X</button></div>` : '<span class=\"muted\">Sin imagen</span>'; const err = st?.error ? `<div class=\"upload-error\">${st.error}</div>` : ''; return `<tr><td>${p.category || '-'}</td><td>${p.name}</td><td>${money(p.price)}</td><td><button class=\"secondary\" data-prod-edit=\"${p.id}\" type=\"button\">Editar</button> <button class=\"secondary\" data-prod-img=\"${p.id}\" type=\"button\" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> <button class=\"secondary\" data-prod-hide=\"${p.id}\" type=\"button\">${p.hidden ? 'Mostrar' : 'Ocultar'}</button> <button class=\"secondary\" data-prod-del=\"${p.id}\" type=\"button\">Eliminar</button></td><td>${imageBlock}${renderImageUploadProgress('product', p.id)}${err}</td></tr>`; }).join('');
+  if (categoriesTable) categoriesTable.innerHTML = (state.categories || []).map((c) => { const st = getImageUploadStatus('category', c); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const imageBlock = state.categoryImages?.[c] ? `<div class=\"image-cell\"><img class=\"image-thumb\" src=\"${state.categoryImages[c]}\" alt=\"${c}\" /><button class=\"danger\" data-cat-img-del=\"${c}\" type=\"button\">X</button></div>` : '<span class=\"muted\">Sin imagen</span>'; const err = st?.error ? `<div class=\"upload-error\">${st.error}</div>` : ''; return `<tr><td>${c}</td><td>${c === 'Todos' ? '-' : `<button class=\"secondary\" data-cat-img=\"${c}\" type=\"button\" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> <button class=\"secondary\" data-cat-del=\"${c}\" type=\"button\">Eliminar</button>`}</td><td>${imageBlock}${renderImageUploadProgress('category', c)}${err}</td></tr>`; }).join('');
   if (productCategory) {
     productCategory.innerHTML = (state.categories || []).map((c) => `<option value="${c}">${c}</option>`).join('');
     if (selectedCategory && state.categories.includes(selectedCategory)) productCategory.value = selectedCategory;
