@@ -19,12 +19,13 @@ const state = {
 
 let sessionWatchInterval = null;
 const SESSION_INACTIVITY_LIMIT_MS = 3 * 60 * 60 * 1000;
-const MAX_IMAGE_UPLOAD_BYTES = 480 * 1024 * 1024;
+const MAX_IMAGE_UPLOAD_BYTES = 16 * 1024 * 1024;
 const imageUploadStatus = { product: {}, category: {} };
 const IMAGE_DB_NAME = 'cafeteria_images_db';
 const IMAGE_DB_STORE = 'images';
 const imagePreviewCache = {};
 const imageLoadInFlight = {};
+const imageMissingRefs = {};
 let imageDbPromise = null;
 let scheduledImageUiRefresh = 0;
 
@@ -976,12 +977,14 @@ function resolveImageSource(value) {
   const raw = String(value || '');
   if (!raw) return '';
   if (!raw.startsWith('idb:')) return raw;
+  if (imageMissingRefs[raw]) return '';
   if (imagePreviewCache[raw]) return imagePreviewCache[raw];
   if (!imageLoadInFlight[raw]) {
     imageLoadInFlight[raw] = (async () => {
       try {
         const blob = await imageDbGet(raw.slice(4));
         if (blob) imagePreviewCache[raw] = URL.createObjectURL(blob);
+        else imageMissingRefs[raw] = true;
       } catch {}
       finally {
         delete imageLoadInFlight[raw];
@@ -994,6 +997,12 @@ function resolveImageSource(value) {
 
 async function saveImageFileToStorage(file, previousValue = '') {
   const ref = `idb:${uid()}`;
+  const dataUrl = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(r.error || new Error('No se pudo leer la imagen.'));
+    r.readAsDataURL(file);
+  });
   await imageDbPut(ref.slice(4), file);
   imagePreviewCache[ref] = URL.createObjectURL(file);
   const prevKey = imageRefKey(previousValue);
@@ -1004,7 +1013,7 @@ async function saveImageFileToStorage(file, previousValue = '') {
       delete imagePreviewCache[previousValue];
     }
   }
-  return ref;
+  return dataUrl;
 }
 
 function imageUploadKey(kind, key) {
