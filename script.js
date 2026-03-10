@@ -400,13 +400,32 @@ function refreshFinancialViews() {
   renderOutflows();
 }
 
+function productsForLocalPersistence() {
+  return (state.products || []).map((p) => {
+    const raw = String(p?.imageDataUrl || '');
+    if (!raw.startsWith('data:')) return p;
+    const copy = { ...p };
+    delete copy.imageDataUrl;
+    return copy;
+  });
+}
+
+function categoryImagesForLocalPersistence() {
+  const out = {};
+  Object.entries(state.categoryImages || {}).forEach(([key, value]) => {
+    const raw = String(value || '');
+    if (!raw.startsWith('data:')) out[key] = value;
+  });
+  return out;
+}
+
 function saveLocalState() {
   localStorage.setItem('cafeteria_last_sync_at', String(state.lastSyncAt || 0));
   localStorage.setItem('cafeteria_force_logout_at', String(state.forceLogoutAt || 0));
   localStorage.setItem('cafeteria_cash_boxes', JSON.stringify(state.cashBoxes || []));
   localStorage.setItem('cafeteria_active_cash_box_id', state.activeCashBoxId || '');
   localStorage.setItem('cafeteria_system_status', state.systemStatus || 'CAJA_CERRADA');
-  localStorage.setItem('cafeteria_products', JSON.stringify(state.products));
+  localStorage.setItem('cafeteria_products', JSON.stringify(productsForLocalPersistence()));
   localStorage.setItem('cafeteria_sales', JSON.stringify(state.sales));
   localStorage.setItem('cafeteria_deleted_sales', JSON.stringify(state.deletedSales));
   localStorage.setItem('cafeteria_cash_closings', JSON.stringify(state.cashClosings));
@@ -426,7 +445,7 @@ function saveLocalState() {
   localStorage.setItem('cafeteria_removed_people_ids', JSON.stringify(state.removedPeopleIds || []));
   localStorage.setItem('cafeteria_user_sales_modes', JSON.stringify(state.userSalesModes || {}));
   localStorage.setItem('cafeteria_touch_ui_config_by_user', JSON.stringify(state.touchUiConfigByUser || {}));
-  localStorage.setItem('cafeteria_category_images', JSON.stringify(state.categoryImages || {}));
+  localStorage.setItem('cafeteria_category_images', JSON.stringify(categoryImagesForLocalPersistence()));
 }
 
 function persist(options = {}) {
@@ -637,6 +656,7 @@ function ensurePeopleData() {
 function currentSalesMode() {
   const username = state.currentUser?.username || '';
   if (!username) return 'generic';
+  if (!hasPermission('viewSalesModeButton')) return 'generic';
   return state.userSalesModes?.[username] === 'touch' ? 'touch' : 'generic';
 }
 
@@ -996,6 +1016,12 @@ function resolveImageSource(value) {
 }
 
 async function saveImageFileToStorage(file, previousValue = '') {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(r.error || new Error('No se pudo leer la imagen.'));
+    r.readAsDataURL(file);
+  });
   const ref = `idb:${uid()}`;
   await imageDbPut(ref.slice(4), file);
   imagePreviewCache[ref] = URL.createObjectURL(file);
@@ -1007,7 +1033,7 @@ async function saveImageFileToStorage(file, previousValue = '') {
       delete imagePreviewCache[previousValue];
     }
   }
-  return ref;
+  return dataUrl;
 }
 
 function imageUploadKey(kind, key) {
