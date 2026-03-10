@@ -795,6 +795,7 @@ function renderCart() {
   if (cashTotalDisplay) cashTotalDisplay.value = money(totals.final);
   if (cashChangeDisplay) cashChangeDisplay.value = money(Math.max(0, Number(cashPaidInput?.value || 0) - totals.final));
   if (currentSalesMode() === 'touch') renderTouchSaleUi();
+  syncSaleSubmitVisibility();
 }
 
 function renderSaleSelectors() {
@@ -895,6 +896,7 @@ function openSalesModeScreen() {
     setSalesModeForCurrentUser('touch');
     setTouchUiConfigForCurrentUser({ grid: gridSel?.value || cfg.grid, cartPosition: posSel?.value || cfg.cartPosition });
     syncSaleUiModeVisibility();
+    syncSaleSubmitVisibility();
     overlay.remove();
   });
   gridSel?.addEventListener('change', () => setTouchUiConfigForCurrentUser({ grid: gridSel.value }));
@@ -2683,7 +2685,7 @@ function estimateTicketHeightMm(data, cfg) {
   const totalsSection = hasDiscount ? 25 : 20;
   const paymentSection = Math.max(10, paymentRows * 5.2);
   const messages = (cfg?.message1 ? 6 : 0) + (cfg?.message2 ? 6 : 0);
-  return Math.max(140, Math.min(1200, base + itemsSection + totalsSection + paymentSection + messages + 12));
+  return Math.max(180, Math.min(5000, base + itemsSection + totalsSection + paymentSection + messages + 60));
 }
 
 function invoicePaymentRows(sale, symbol) {
@@ -2771,7 +2773,7 @@ async function openSaleInvoiceWindow(sale, options = {}) {
     doc.setFontSize(Math.max(7, Number(cfg.message2SizePt || 9)));
     if (cfg.message2) doc.text(String(cfg.message2), width / 2, y, { align: 'center', maxWidth: width - (margin * 2) });
 
-    const finalHeight = Math.max(120, Math.min(1200, y + margin + 8));
+    const finalHeight = Math.max(160, Math.min(5000, y + margin + 18));
     if (doc.internal?.pageSize?.setHeight) doc.internal.pageSize.setHeight(finalHeight);
 
     const blobUrl = doc.output('bloburl');
@@ -3308,7 +3310,6 @@ async function handleLogin() {
   if (loginUserInput) loginUserInput.value = '';
   if (loginPassInput) loginPassInput.value = '';
   setMsg(loginMessage, '');
-  await pullFromCloud();
   markUserActivity('login');
   persist();
   maybeForceLogoutFromClosure();
@@ -3497,7 +3498,6 @@ async function registerSale() {
   if (!state.currentUser) return setMsg(saleMessage, 'Inicia sesión para registrar ventas.', false);
   if (!getActiveCashBox()) return setMsg(saleMessage, 'Debes abrir caja para vender.', false);
   if (!state.currentCart.length) return setMsg(saleMessage, 'Añade productos antes de generar la venta.', false);
-  await pullFromCloud();
   const totals = saleTotals();
   const payment = paymentType?.value || 'efectivo';
   let breakdown = { cash: 0, qr: 0 };
@@ -3587,13 +3587,41 @@ async function registerSale() {
   renderWarehouse();
   if (saleSuccessTitle) saleSuccessTitle.textContent = `Venta realizada exitosamente · Pedido #${orderNumberLabel(sale.orderNumber)}`;
   saleSuccessModal?.classList.remove('hidden');
+  syncSaleSubmitVisibility();
   } finally {
     isSubmittingSale = false;
     if (createSaleBtn) createSaleBtn.disabled = false;
+    syncSaleSubmitVisibility();
   }
 }
 
-function hideSaleSuccessModal() { saleSuccessModal?.classList.add('hidden'); saleFormContainer?.classList.add('hidden'); state.currentCart = []; activeSaleCategory=''; if (paymentType) paymentType.value='efectivo'; cashPaymentFields?.classList.remove('hidden'); if (cashPaidInput) cashPaidInput.value=''; mixedFields?.classList.add('hidden'); debtFields?.classList.add('hidden'); partialFields?.classList.add('hidden'); renderCart(); renderSaleSelectors(); }
+function hideSaleSuccessModal() { saleSuccessModal?.classList.add('hidden'); saleFormContainer?.classList.add('hidden'); state.currentCart = []; activeSaleCategory=''; if (paymentType) paymentType.value='efectivo'; cashPaymentFields?.classList.remove('hidden'); if (cashPaidInput) cashPaidInput.value=''; mixedFields?.classList.add('hidden'); debtFields?.classList.add('hidden'); partialFields?.classList.add('hidden'); renderCart(); renderSaleSelectors(); syncSaleSubmitVisibility(); }
+
+function ensureProceedPaymentButton() {
+  if (!createSaleBtn) return null;
+  let btn = document.getElementById('proceedPaymentBtn');
+  if (btn) return btn;
+  btn = document.createElement('button');
+  btn.id = 'proceedPaymentBtn';
+  btn.type = 'button';
+  btn.className = 'secondary';
+  btn.textContent = 'Proceder con el pago';
+  createSaleBtn.insertAdjacentElement('beforebegin', btn);
+  return btn;
+}
+
+function syncSaleSubmitVisibility() {
+  if (!createSaleBtn) return;
+  const proceedBtn = ensureProceedPaymentButton();
+  const isTouch = currentSalesMode() === 'touch';
+  const paymentReady = Boolean(paymentType?.value);
+  const canProceed = Array.isArray(state.currentCart) && state.currentCart.length > 0;
+  if (proceedBtn) {
+    proceedBtn.classList.toggle('hidden', isTouch);
+    proceedBtn.disabled = !canProceed;
+  }
+  createSaleBtn.classList.toggle('hidden', isTouch || !paymentReady || !canProceed || !saleFormContainer || saleFormContainer.classList.contains('hidden'));
+}
 
 function ensureQueuedOrderButtons() {
   if (!saleFormContainer || document.getElementById('queueSaleBtn')) return;
@@ -4185,6 +4213,7 @@ function wireEvents() {
     renderSaleSelectors();
     renderCart();
     syncSaleUiModeVisibility();
+    syncSaleSubmitVisibility();
   });
   paymentType?.addEventListener('change', () => {
     const t = paymentType.value;
@@ -4193,9 +4222,17 @@ function wireEvents() {
     debtFields?.classList.toggle('hidden', t !== 'deuda');
     partialFields?.classList.toggle('hidden', t !== 'medio_pago');
     renderCart();
+    syncSaleSubmitVisibility();
   });
   cashAmount?.addEventListener('input', renderCart);
   cashPaidInput?.addEventListener('input', renderCart);
+  ensureProceedPaymentButton()?.addEventListener('click', () => {
+    if (!state.currentCart?.length) return setMsg(saleMessage, 'Añade productos antes de proceder al pago.', false);
+    const paymentCard = paymentType?.closest('.card');
+    paymentCard?.classList.remove('hidden');
+    paymentType?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    syncSaleSubmitVisibility();
+  });
   addDebtorBtn?.addEventListener('click', () => openPersonFormModal());
   addPartialPersonBtn?.addEventListener('click', () => openPersonFormModal());
   listDebtorBtn?.addEventListener('click', openPeopleListModal);
