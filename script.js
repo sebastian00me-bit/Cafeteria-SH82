@@ -331,6 +331,7 @@ const billingAutoPrintToggleActionBtn = $('billingAutoPrintToggleActionBtn');
 const closeCashBtnCard = $('closeCashBtn');
 let activeSaleCategory = '';
 let activeOrderId = '';
+let isSubmittingSale = false;
 state.currentCart = [];
 state.outflows = JSON.parse(localStorage.getItem('cafeteria_outflows') || '[]');
 state.comboDraft = [];
@@ -2672,6 +2673,19 @@ function buildInvoiceData(sale) {
   };
 }
 
+function estimateTicketHeightMm(data, cfg) {
+  const itemsCount = Math.max(1, Number(data?.items?.length || 0));
+  const hasDiscount = Number(data?.discount || 0) > 0;
+  const paymentRows = invoicePaymentRows(data || {}, cfg?.currencySymbol || 'Bs').length;
+  const logoBlock = cfg?.logoDataUrl ? Math.max(16, Number(cfg.logoSizeMm || 28) * 0.7) + Math.max(2, Number(cfg.logoTitleGapMm || 8)) : 0;
+  const base = 78 + logoBlock;
+  const itemsSection = 8 + (itemsCount * 6.2);
+  const totalsSection = hasDiscount ? 25 : 20;
+  const paymentSection = Math.max(10, paymentRows * 5.2);
+  const messages = (cfg?.message1 ? 6 : 0) + (cfg?.message2 ? 6 : 0);
+  return Math.max(140, Math.min(1200, base + itemsSection + totalsSection + paymentSection + messages + 12));
+}
+
 function invoicePaymentRows(sale, symbol) {
   const breakdown = sale?.breakdown || {};
   if (sale?.payment === 'efectivo') {
@@ -2707,7 +2721,8 @@ async function openSaleInvoiceWindow(sale, options = {}) {
     await ensureJsPdfLibs();
     const { jsPDF } = window.jspdf;
     const ticketWidth = Math.max(58, Math.min(120, Number(cfg.paperWidthMm || 80)));
-    const doc = new jsPDF({ unit: 'mm', format: [ticketWidth, 220] });
+    const ticketHeight = estimateTicketHeightMm(data, cfg);
+    const doc = new jsPDF({ unit: 'mm', format: [ticketWidth, ticketHeight] });
     const margin = Math.max(2, Number(cfg.marginMm || 4));
     const width = doc.internal.pageSize.getWidth();
     let y = margin + 2;
@@ -2732,20 +2747,20 @@ async function openSaleInvoiceWindow(sale, options = {}) {
     doc.line(margin, y + 1, width - margin, y + 1); y += 4;
 
     const itemRows = (data.items || []).map((it) => [String(it.name || ''), String(it.qty || 0), `${symbol} ${Number(it.lineTotal || 0).toFixed(2)}`]);
-    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, head: [['Producto', 'Cant', 'Subtotal']], body: itemRows, styles: { fontSize: 8, cellPadding: 1.2 }, theme: 'plain', columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } } });
+    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, head: [['Producto', 'Cant', 'Subtotal']], body: itemRows, styles: { fontSize: 8, cellPadding: 1.2 }, theme: 'plain', pageBreak: 'avoid', rowPageBreak: 'avoid', columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } } });
     y = doc.lastAutoTable.finalY + 2;
     const totalsRows = [['Cantidad artículos', String(Number(data.totalItems || 0))], ['Subtotal', `${symbol} ${Number(data.subtotal || 0).toFixed(2)}`]];
     if (Number(data.discount || 0) > 0) totalsRows.push(['Descuento', `${symbol} ${Number(data.discount || 0).toFixed(2)}`]);
-    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, body: totalsRows, styles: { fontSize: 9, cellPadding: 1.1 }, theme: 'plain', columnStyles: { 1: { halign: 'right' } } });
+    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, body: totalsRows, styles: { fontSize: 9, cellPadding: 1.1 }, theme: 'plain', pageBreak: 'avoid', rowPageBreak: 'avoid', columnStyles: { 1: { halign: 'right' } } });
     y = doc.lastAutoTable.finalY + 1;
     doc.setLineDashPattern([1, 1], 0);
     doc.line(margin, y, width - margin, y); y += 1.2;
-    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, body: [['TOTAL', `${symbol} ${Number(data.total || 0).toFixed(2)}`]], styles: { fontSize: 11, cellPadding: 1.3, fontStyle: 'bold' }, theme: 'plain', columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } } });
+    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, body: [['TOTAL', `${symbol} ${Number(data.total || 0).toFixed(2)}`]], styles: { fontSize: 11, cellPadding: 1.3, fontStyle: 'bold' }, theme: 'plain', pageBreak: 'avoid', rowPageBreak: 'avoid', columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } } });
     y = doc.lastAutoTable.finalY + 2;
     doc.setLineDashPattern([1, 1], 0);
     doc.line(margin, y, width - margin, y); y += 2;
 
-    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, body: invoicePaymentRows(sale, symbol), styles: { fontSize: 8.5, cellPadding: 1.0 }, theme: 'plain', columnStyles: { 1: { halign: 'right' } } });
+    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, body: invoicePaymentRows(sale, symbol), styles: { fontSize: 8.5, cellPadding: 1.0 }, theme: 'plain', pageBreak: 'avoid', rowPageBreak: 'avoid', columnStyles: { 1: { halign: 'right' } } });
     y = doc.lastAutoTable.finalY + 3;
     doc.setLineDashPattern([1, 1], 0);
     doc.line(margin, y, width - margin, y); y += 5;
@@ -2755,6 +2770,9 @@ async function openSaleInvoiceWindow(sale, options = {}) {
     doc.setFont(String(cfg.message2Font || 'helvetica'), cfg.message2Bold ? 'bold' : 'normal');
     doc.setFontSize(Math.max(7, Number(cfg.message2SizePt || 9)));
     if (cfg.message2) doc.text(String(cfg.message2), width / 2, y, { align: 'center', maxWidth: width - (margin * 2) });
+
+    const finalHeight = Math.max(120, Math.min(1200, y + margin + 8));
+    if (doc.internal?.pageSize?.setHeight) doc.internal.pageSize.setHeight(finalHeight);
 
     const blobUrl = doc.output('bloburl');
     if (options.autoPrint) {
@@ -3471,7 +3489,11 @@ function closeCashSession() {
 }
 
 async function registerSale() {
+  if (isSubmittingSale) return;
+  isSubmittingSale = true;
+  if (createSaleBtn) createSaleBtn.disabled = true;
   touchSessionActivity();
+  try {
   if (!state.currentUser) return setMsg(saleMessage, 'Inicia sesión para registrar ventas.', false);
   if (!getActiveCashBox()) return setMsg(saleMessage, 'Debes abrir caja para vender.', false);
   if (!state.currentCart.length) return setMsg(saleMessage, 'Añade productos antes de generar la venta.', false);
@@ -3554,7 +3576,10 @@ async function registerSale() {
   state.currentCart = [];
   persist();
   const billingCfg = billingSettings();
-  if (billingCfg.enabled) await openSaleInvoiceWindow(sale, { syncBeforeOpen: false, autoPrint: Boolean(billingCfg.autoPrintEnabled) });
+  if (billingCfg.enabled) {
+    Promise.resolve(openSaleInvoiceWindow(sale, { syncBeforeOpen: false, autoPrint: Boolean(billingCfg.autoPrintEnabled) }))
+      .catch((err) => { console.error('[invoice] non-blocking open failed', err); });
+  }
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
@@ -3562,6 +3587,10 @@ async function registerSale() {
   renderWarehouse();
   if (saleSuccessTitle) saleSuccessTitle.textContent = `Venta realizada exitosamente · Pedido #${orderNumberLabel(sale.orderNumber)}`;
   saleSuccessModal?.classList.remove('hidden');
+  } finally {
+    isSubmittingSale = false;
+    if (createSaleBtn) createSaleBtn.disabled = false;
+  }
 }
 
 function hideSaleSuccessModal() { saleSuccessModal?.classList.add('hidden'); saleFormContainer?.classList.add('hidden'); state.currentCart = []; activeSaleCategory=''; if (paymentType) paymentType.value='efectivo'; cashPaymentFields?.classList.remove('hidden'); if (cashPaidInput) cashPaidInput.value=''; mixedFields?.classList.add('hidden'); debtFields?.classList.add('hidden'); partialFields?.classList.add('hidden'); renderCart(); renderSaleSelectors(); }
@@ -3957,7 +3986,7 @@ function saveMainSettings() {
 
 
 
-function saveBillingSettings() {
+async function saveBillingSettings() {
   if (!hasPermission('accessSettings')) return setMsg(homeMessage, 'No tienes permiso para facturación.', false);
   const billing = normalizeBillingSettings();
   billing.enabled = Boolean(billingEnabledInput?.checked);
@@ -3979,22 +4008,23 @@ function saveBillingSettings() {
   billing.message2Bold = Boolean(billingMessage2BoldInput?.checked);
   billing.message2Font = String(billingMessage2FontInput?.value || billing.message2Font || 'helvetica');
   billing.autoPrintEnabled = Boolean(billingAutoPrintInput?.checked);
-  const applyPersist = () => {
+  const applyPersist = async () => {
     state.settings.billing = { ...billing };
     persist();
+    try { await syncToCloud(); } catch (err) { console.error('[billing] sync save failed', err); }
     applySettings();
     if (billingConfigStatus) billingConfigStatus.textContent = 'Configuración de facturación guardada y sincronizada.';
   };
   const file = billingLogoInput?.files?.[0];
   if (!file) {
-    applyPersist();
+    await applyPersist();
     return;
   }
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     billing.logoDataUrl = String(reader.result || '');
     if (billingLogoInput) billingLogoInput.value = '';
-    applyPersist();
+    await applyPersist();
   };
   reader.onerror = () => {
     if (billingConfigStatus) billingConfigStatus.textContent = 'No se pudo leer el logo de facturación.';
