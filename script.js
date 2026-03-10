@@ -2603,32 +2603,88 @@ function buildInvoiceData(sale) {
   };
 }
 
-function invoiceHtml(data) {
-  const cfg = { ...defaultBillingConfig, ...(data?.config || {}) };
-  const symbol = cfg.currencySymbol || 'Bs';
-  const dt = new Date(data.createdAt || Date.now());
-  const rows = (data.items || []).map((it) => `<tr><td>${escapeHtml(it.name)}</td><td>${it.qty}</td><td>${symbol} ${Number(it.lineTotal || 0).toFixed(2)}</td></tr>`).join('');
-  const discountLine = Number(data.discount || 0) > 0 ? `<p class="row"><span>Descuento</span><strong>${symbol} ${Number(data.discount || 0).toFixed(2)}</strong></p>` : '';
-  const logo = cfg.logoDataUrl ? `<img class="logo" src="${cfg.logoDataUrl}" alt="logo" />` : '';
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8" /><title>Factura #${escapeHtml(orderNumberLabel(data.orderNumber))}</title><style>
-  body{font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:16px;color:#111}
-  .toolbar{display:flex;gap:8px;justify-content:center;margin-bottom:10px}
-  .ticket{background:#fff;max-width:${Math.max(220, Number(cfg.paperWidthMm||80)*3.78)}px;margin:0 auto;padding:${Math.max(0, Number(cfg.marginMm||4)*3.78)}px;border:1px solid #ddd}
-  .center{text-align:center}.logo{max-width:120px;max-height:120px;object-fit:contain;display:block;margin:0 auto 6px}
-  .line{border-top:1px dashed #444;margin:8px 0}.meta p{margin:2px 0}.items{width:100%;border-collapse:collapse}.items td{padding:4px 0;border-bottom:1px dotted #ddd;font-size:13px}.items td:nth-child(2),.items td:nth-child(3){text-align:right}
-  .row{display:flex;justify-content:space-between;margin:3px 0}.total{font-size:24px;font-weight:800}
-  @media print{body{background:#fff;padding:0}.toolbar{display:none}.ticket{border:0;max-width:none}}
-  </style></head><body><div class="toolbar"><button onclick="window.print()">Imprimir</button><button onclick="window.close()">Cerrar</button></div><div class="ticket"><div class="center">${logo}<h2 style="margin:0 0 4px">${escapeHtml(cfg.title || 'RECIBO')}</h2></div><div class="meta"><p>No Recibo: ${escapeHtml(orderNumberLabel(data.orderNumber))}</p><p>${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}</p><p>Usuario: ${escapeHtml(data.user || '-')}</p></div><div class="line"></div><table class="items"><tbody>${rows}</tbody></table><p class="row"><span>Cantidad de artículos</span><strong>${Number(data.totalItems || 0)}</strong></p><p class="row"><span>Subtotal</span><strong>${symbol} ${Number(data.subtotal || 0).toFixed(2)}</strong></p>${discountLine}<p class="row total"><span>TOTAL</span><strong>${symbol} ${Number(data.total || 0).toFixed(2)}</strong></p><div class="line"></div>${data.paymentHtml}<div class="line"></div><p class="center">${escapeHtml(cfg.message1 || '')}</p><p class="center"><strong>${escapeHtml(cfg.message2 || '')}</strong></p></div></body></html>`;
+function invoicePaymentRows(sale, symbol) {
+  const breakdown = sale?.breakdown || {};
+  if (sale?.payment === 'efectivo') {
+    const received = Number((breakdown.paid ?? sale?.total) || 0);
+    const change = Math.max(0, received - Number(sale?.total || 0));
+    return [['Método de pago', 'Efectivo'], ['Recibido', `${symbol} ${received.toFixed(2)}`], ['Cambio', `${symbol} ${change.toFixed(2)}`]];
+  }
+  if (sale?.payment === 'qr') {
+    const received = Number((breakdown.qr ?? sale?.total) || 0);
+    return [['Método de pago', 'QR'], ['Recibido QR', `${symbol} ${received.toFixed(2)}`]];
+  }
+  if (sale?.payment === 'mixto') {
+    return [['Método de pago', 'Mixto'], ['Efectivo', `${symbol} ${Number(breakdown.cash || 0).toFixed(2)}`], ['QR', `${symbol} ${Number(breakdown.qr || 0).toFixed(2)}`], ['Total', `${symbol} ${Number(sale?.total || 0).toFixed(2)}`]];
+  }
+  if (sale?.payment === 'medio_pago') {
+    return [['Método de pago', 'Medio pago'], ['Recibido efectivo', `${symbol} ${Number(breakdown.cash || 0).toFixed(2)}`], ['Recibido QR', `${symbol} ${Number(breakdown.qr || 0).toFixed(2)}`], ['Deuda', `${symbol} ${Number(sale?.debtAmount || 0).toFixed(2)}`]];
+  }
+  if (sale?.payment === 'deuda') {
+    return [['Método de pago', 'Por pagar'], ['Deuda', `${symbol} ${Number((sale?.debtAmount || sale?.total) || 0).toFixed(2)}`]];
+  }
+  return [['Método de pago', String(sale?.payment || '-')]];
 }
 
-function openSaleInvoiceWindow(sale) {
+async function openSaleInvoiceWindow(sale, options = {}) {
   if (!sale) return;
+  if (options.syncBeforeOpen) await syncToCloud();
   const data = sale.invoiceSnapshot || buildInvoiceData(sale);
-  const win = window.open('', '_blank', 'noopener,noreferrer');
-  if (!win) return;
-  win.document.open();
-  win.document.write(invoiceHtml(data));
-  win.document.close();
+  const cfg = { ...defaultBillingConfig, ...(data?.config || {}) };
+  const symbol = cfg.currencySymbol || 'Bs';
+  try {
+    await ensureJsPdfLibs();
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: [Math.max(100, Number(cfg.paperWidthMm || 80) * 2.8), Math.max(180, Number(cfg.paperWidthMm || 80) * 4.2)] });
+    const margin = Math.max(2, Number(cfg.marginMm || 4));
+    const width = doc.internal.pageSize.getWidth();
+    let y = margin + 2;
+    if (cfg.logoDataUrl) {
+      try { doc.addImage(cfg.logoDataUrl, 'PNG', (width / 2) - 14, y, 28, 20); y += 22; } catch {}
+    }
+    doc.setFontSize(12);
+    doc.text(String(cfg.title || 'RECIBO'), width / 2, y, { align: 'center' });
+    y += 5;
+    const dt = new Date(data.createdAt || Date.now());
+    doc.setFontSize(9);
+    doc.text(`No Recibo: ${orderNumberLabel(data.orderNumber)}`, margin, y); y += 4;
+    doc.text(`Fecha: ${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}`, margin, y); y += 4;
+    doc.text(`Usuario: ${data.user || '-'}`, margin, y); y += 3;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margin, y + 1, width - margin, y + 1); y += 4;
+
+    const itemRows = (data.items || []).map((it) => [String(it.name || ''), String(it.qty || 0), `${symbol} ${Number(it.lineTotal || 0).toFixed(2)}`]);
+    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, head: [['Producto', 'Cant', 'Subtotal']], body: itemRows, styles: { fontSize: 8, cellPadding: 1.2 }, theme: 'plain', columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } } });
+    y = doc.lastAutoTable.finalY + 2;
+    const totalsRows = [['Cantidad artículos', String(Number(data.totalItems || 0))], ['Subtotal', `${symbol} ${Number(data.subtotal || 0).toFixed(2)}`]];
+    if (Number(data.discount || 0) > 0) totalsRows.push(['Descuento', `${symbol} ${Number(data.discount || 0).toFixed(2)}`]);
+    totalsRows.push(['TOTAL', `${symbol} ${Number(data.total || 0).toFixed(2)}`]);
+    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, body: totalsRows, styles: { fontSize: 9, cellPadding: 1.1 }, theme: 'plain', columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } } });
+    y = doc.lastAutoTable.finalY + 2;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margin, y, width - margin, y); y += 2;
+
+    doc.autoTable({ startY: y, margin: { left: margin, right: margin }, body: invoicePaymentRows(sale, symbol), styles: { fontSize: 8.5, cellPadding: 1.0 }, theme: 'plain', columnStyles: { 1: { halign: 'right' } } });
+    y = doc.lastAutoTable.finalY + 3;
+    doc.setLineDashPattern([1, 1], 0);
+    doc.line(margin, y, width - margin, y); y += 5;
+    doc.setFontSize(9);
+    if (cfg.message1) { doc.text(String(cfg.message1), width / 2, y, { align: 'center', maxWidth: width - (margin * 2) }); y += 5; }
+    if (cfg.message2) doc.text(String(cfg.message2), width / 2, y, { align: 'center' });
+
+    const blobUrl = doc.output('bloburl');
+    const win = window.open(blobUrl, '_blank', 'noopener,noreferrer');
+    if (!win) {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `factura_${orderNumberLabel(data.orderNumber)}.pdf`;
+      a.click();
+    }
+    setTimeout(() => { try { URL.revokeObjectURL(blobUrl); } catch {} }, 120000);
+  } catch (err) {
+    console.error('[invoice] open pdf', err);
+    setMsg(homeMessage, 'No se pudo generar la factura PDF.', false);
+  }
 }
 
 function renderSalesHistory() {
@@ -3405,7 +3461,7 @@ async function registerSale() {
   state.sales.unshift(sale);
   state.currentCart = [];
   persist();
-  if (billingSettings().enabled) setTimeout(() => openSaleInvoiceWindow(sale), 120);
+  if (billingSettings().enabled) await openSaleInvoiceWindow(sale, { syncBeforeOpen: true });
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
