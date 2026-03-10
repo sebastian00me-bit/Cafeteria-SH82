@@ -172,7 +172,9 @@ const openMainConfigBtn = $('openMainConfigBtn');
 const openUsersConfigBtn = $('openUsersConfigBtn');
 const openDatabaseConfigBtn = $('openDatabaseConfigBtn');
 const openSalesConfigBtn = $('openSalesConfigBtn');
+const openBillingConfigBtn = $('openBillingConfigBtn');
 const salesConfigCard = $('salesConfigCard');
+const billingConfigCard = $('billingConfigCard');
 const enableStockBtn = $('enableStockBtn');
 const disableStockBtn = $('disableStockBtn');
 const enableOrdersBtn = $('enableOrdersBtn');
@@ -187,6 +189,7 @@ const settingsMenuCard = $('settingsMenuCard');
 const backFromMainConfigBtn = $('backFromMainConfigBtn');
 const backFromDatabaseConfigBtn = $('backFromDatabaseConfigBtn');
 const backFromSalesConfigBtn = $('backFromSalesConfigBtn');
+const backFromBillingConfigBtn = $('backFromBillingConfigBtn');
 const backFromUsersConfigBtn = $('backFromUsersConfigBtn');
 const toggleUserFormBtn = $('toggleUserFormBtn');
 const userFormCard = $('userFormCard');
@@ -296,6 +299,17 @@ const firebaseDbTokenInput = $('firebaseDbTokenInput');
 const firebaseDbPathInput = $('firebaseDbPathInput');
 const syncNowBtn = $('syncNowBtn');
 const syncStatus = $('syncStatus');
+const billingEnabledInput = $('billingEnabledInput');
+const billingLogoInput = $('billingLogoInput');
+const removeBillingLogoBtn = $('removeBillingLogoBtn');
+const billingTitleInput = $('billingTitleInput');
+const billingCurrencyInput = $('billingCurrencyInput');
+const billingPaperWidthInput = $('billingPaperWidthInput');
+const billingMarginInput = $('billingMarginInput');
+const billingMessage1Input = $('billingMessage1Input');
+const billingMessage2Input = $('billingMessage2Input');
+const saveBillingConfigBtn = $('saveBillingConfigBtn');
+const billingConfigStatus = $('billingConfigStatus');
 const closeCashBtnCard = $('closeCashBtn');
 let activeSaleCategory = '';
 let activeOrderId = '';
@@ -347,12 +361,38 @@ const defaultCloudConfig = {
   firebaseDbPath: SHARED_DB_PATH
 };
 
+const defaultBillingConfig = {
+  enabled: false,
+  logoDataUrl: '',
+  title: 'CAFETERIA SH82',
+  currencySymbol: 'Bs',
+  paperWidthMm: 80,
+  marginMm: 4,
+  message1: 'Gracias por su compra',
+  message2: 'SHALOM'
+};
+
+function normalizeBillingSettings() {
+  if (!state.settings || typeof state.settings !== 'object') state.settings = {};
+  const merged = { ...defaultBillingConfig, ...(state.settings.billing || {}) };
+  merged.enabled = Boolean(merged.enabled);
+  merged.paperWidthMm = Math.max(58, Math.min(120, Number(merged.paperWidthMm || 80)));
+  merged.marginMm = Math.max(0, Math.min(20, Number(merged.marginMm || 4)));
+  merged.title = String(merged.title || defaultBillingConfig.title);
+  merged.currencySymbol = String(merged.currencySymbol || defaultBillingConfig.currencySymbol);
+  merged.message1 = String(merged.message1 || '');
+  merged.message2 = String(merged.message2 || '');
+  state.settings.billing = merged;
+  return merged;
+}
+
 function normalizeCloudSettings() {
   state.settings = { ...defaultCloudConfig, ...(state.settings || {}) };
   if (!String(state.settings.firebaseDbUrl || '').trim()) state.settings.firebaseDbUrl = defaultCloudConfig.firebaseDbUrl;
   if (!String(state.settings.firebaseDbToken || '').trim()) state.settings.firebaseDbToken = defaultCloudConfig.firebaseDbToken;
   const currentPath = String(state.settings.firebaseDbPath || '').trim();
   if (!currentPath || currentPath === LEGACY_DB_PATH) state.settings.firebaseDbPath = SHARED_DB_PATH;
+  normalizeBillingSettings();
 }
 
 normalizeCloudSettings();
@@ -1263,6 +1303,14 @@ function applySettings() {
   syncTempConfigFromApp();
   if (stockMinInput) stockMinInput.value = String(Number(appConfig.stockMinimo || 0));
   if (salesConfigStatus) salesConfigStatus.textContent = `Stock: ${appConfig.stockActivo ? 'ACTIVO' : 'INACTIVO'} · Pedidos: ${appConfig.activarPedidos ? 'ACTIVO' : 'INACTIVO'}`;
+  const billing = normalizeBillingSettings();
+  if (billingEnabledInput) billingEnabledInput.checked = Boolean(billing.enabled);
+  if (billingTitleInput) billingTitleInput.value = billing.title || '';
+  if (billingCurrencyInput) billingCurrencyInput.value = billing.currencySymbol || 'Bs';
+  if (billingPaperWidthInput) billingPaperWidthInput.value = String(Number(billing.paperWidthMm || 80));
+  if (billingMarginInput) billingMarginInput.value = String(Number(billing.marginMm || 4));
+  if (billingMessage1Input) billingMessage1Input.value = billing.message1 || '';
+  if (billingMessage2Input) billingMessage2Input.value = billing.message2 || '';
   if (state.settings.logoDataUrl && homeLogo && logoPlaceholder) {
     homeLogo.src = state.settings.logoDataUrl;
     homeLogo.classList.remove('hidden');
@@ -2500,6 +2548,89 @@ function renderSoldProductsList() {
     : '<tr><td colspan="2">Sin ventas en la caja actual.</td></tr>';
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m] || m));
+}
+
+function billingSettings() {
+  return normalizeBillingSettings();
+}
+
+function buildInvoiceData(sale) {
+  const cfg = billingSettings();
+  const items = (sale?.items || []).map((it) => {
+    const qty = Number(it.qty || 0);
+    const unit = Number(it.price || 0);
+    const lineTotal = Number(it.finalSubtotal ?? (unit * qty));
+    const gross = unit * qty;
+    return { name: String(it.name || 'Producto'), qty, unit, lineTotal, gross };
+  });
+  const totalItems = items.reduce((a, it) => a + it.qty, 0);
+  const subtotal = items.reduce((a, it) => a + it.gross, 0);
+  const finalTotal = Number(sale?.total || items.reduce((a, it) => a + it.lineTotal, 0));
+  const discount = Math.max(0, subtotal - finalTotal);
+  const symbol = cfg.currencySymbol || 'Bs';
+  const breakdown = sale?.breakdown || {};
+  let paymentLines = [`<p><strong>Método de pago:</strong> ${escapeHtml((sale?.payment || '-').toUpperCase())}</p>`];
+  if (sale?.payment === 'efectivo') {
+    paymentLines.push(`<p>Recibido: ${symbol} ${Number(breakdown.paid ?? finalTotal).toFixed(2)}</p>`);
+    paymentLines.push(`<p>Cambio: ${symbol} ${Math.max(0, Number((breakdown.paid ?? finalTotal) - finalTotal)).toFixed(2)}</p>`);
+  } else if (sale?.payment === 'qr') {
+    paymentLines.push(`<p>Recibido QR: ${symbol} ${Number(breakdown.qr || finalTotal).toFixed(2)}</p>`);
+  } else if (sale?.payment === 'mixto') {
+    paymentLines.push(`<p>Efectivo: ${symbol} ${Number(breakdown.cash || 0).toFixed(2)}</p>`);
+    paymentLines.push(`<p>QR: ${symbol} ${Number(breakdown.qr || 0).toFixed(2)}</p>`);
+    paymentLines.push(`<p>Total: ${symbol} ${finalTotal.toFixed(2)}</p>`);
+  } else if (sale?.payment === 'medio_pago') {
+    paymentLines.push(`<p>Recibido efectivo: ${symbol} ${Number(breakdown.cash || 0).toFixed(2)}</p>`);
+    paymentLines.push(`<p>Recibido QR: ${symbol} ${Number(breakdown.qr || 0).toFixed(2)}</p>`);
+    paymentLines.push(`<p>Deuda: ${symbol} ${Number(sale?.debtAmount || 0).toFixed(2)}</p>`);
+  } else if (sale?.payment === 'deuda') {
+    paymentLines.push(`<p>Deuda: ${symbol} ${Number(sale?.debtAmount || finalTotal).toFixed(2)}</p>`);
+  }
+  return {
+    config: { ...cfg },
+    saleId: sale?.id || '',
+    orderNumber: sale?.orderNumber,
+    createdAt: sale?.createdAt || new Date().toISOString(),
+    user: sale?.user || '-',
+    items,
+    totalItems,
+    subtotal,
+    discount,
+    total: finalTotal,
+    paymentHtml: paymentLines.join('')
+  };
+}
+
+function invoiceHtml(data) {
+  const cfg = { ...defaultBillingConfig, ...(data?.config || {}) };
+  const symbol = cfg.currencySymbol || 'Bs';
+  const dt = new Date(data.createdAt || Date.now());
+  const rows = (data.items || []).map((it) => `<tr><td>${escapeHtml(it.name)}</td><td>${it.qty}</td><td>${symbol} ${Number(it.lineTotal || 0).toFixed(2)}</td></tr>`).join('');
+  const discountLine = Number(data.discount || 0) > 0 ? `<p class="row"><span>Descuento</span><strong>${symbol} ${Number(data.discount || 0).toFixed(2)}</strong></p>` : '';
+  const logo = cfg.logoDataUrl ? `<img class="logo" src="${cfg.logoDataUrl}" alt="logo" />` : '';
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8" /><title>Factura #${escapeHtml(orderNumberLabel(data.orderNumber))}</title><style>
+  body{font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:16px;color:#111}
+  .toolbar{display:flex;gap:8px;justify-content:center;margin-bottom:10px}
+  .ticket{background:#fff;max-width:${Math.max(220, Number(cfg.paperWidthMm||80)*3.78)}px;margin:0 auto;padding:${Math.max(0, Number(cfg.marginMm||4)*3.78)}px;border:1px solid #ddd}
+  .center{text-align:center}.logo{max-width:120px;max-height:120px;object-fit:contain;display:block;margin:0 auto 6px}
+  .line{border-top:1px dashed #444;margin:8px 0}.meta p{margin:2px 0}.items{width:100%;border-collapse:collapse}.items td{padding:4px 0;border-bottom:1px dotted #ddd;font-size:13px}.items td:nth-child(2),.items td:nth-child(3){text-align:right}
+  .row{display:flex;justify-content:space-between;margin:3px 0}.total{font-size:24px;font-weight:800}
+  @media print{body{background:#fff;padding:0}.toolbar{display:none}.ticket{border:0;max-width:none}}
+  </style></head><body><div class="toolbar"><button onclick="window.print()">Imprimir</button><button onclick="window.close()">Cerrar</button></div><div class="ticket"><div class="center">${logo}<h2 style="margin:0 0 4px">${escapeHtml(cfg.title || 'RECIBO')}</h2></div><div class="meta"><p>No Recibo: ${escapeHtml(orderNumberLabel(data.orderNumber))}</p><p>${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}</p><p>Usuario: ${escapeHtml(data.user || '-')}</p></div><div class="line"></div><table class="items"><tbody>${rows}</tbody></table><p class="row"><span>Cantidad de artículos</span><strong>${Number(data.totalItems || 0)}</strong></p><p class="row"><span>Subtotal</span><strong>${symbol} ${Number(data.subtotal || 0).toFixed(2)}</strong></p>${discountLine}<p class="row total"><span>TOTAL</span><strong>${symbol} ${Number(data.total || 0).toFixed(2)}</strong></p><div class="line"></div>${data.paymentHtml}<div class="line"></div><p class="center">${escapeHtml(cfg.message1 || '')}</p><p class="center"><strong>${escapeHtml(cfg.message2 || '')}</strong></p></div></body></html>`;
+}
+
+function openSaleInvoiceWindow(sale) {
+  if (!sale) return;
+  const data = sale.invoiceSnapshot || buildInvoiceData(sale);
+  const win = window.open('', '_blank', 'noopener,noreferrer');
+  if (!win) return;
+  win.document.open();
+  win.document.write(invoiceHtml(data));
+  win.document.close();
+}
+
 function renderSalesHistory() {
   if (!salesTable) return;
   const userFilter = salesUserFilter?.value || '';
@@ -2513,7 +2644,7 @@ function renderSalesHistory() {
   const searchOrder = (salesOrderSearchInput?.value || '').trim();
   if (userFilter) list = list.filter((s) => s.user === userFilter);
   if (searchOrder) list = list.filter((s) => String(s.orderNumber || '').includes(searchOrder));
-  salesTable.innerHTML = list.length ? list.map((sale) => `<tr><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td><button type="button" class="secondary" data-sale-act="view" data-sale-id="${sale.id}">Ver Venta</button>${hasPermission('deleteSales') ? ` <button type="button" class="secondary" data-sale-act="edit" data-sale-id="${sale.id}">Editar venta</button> <button type="button" class="secondary" data-sale-act="del" data-sale-id="${sale.id}">Eliminar venta</button>` : ''}</td><td>${sale.user}</td></tr>`).join('') : '<tr><td colspan="6">Sin ventas.</td></tr>';
+  salesTable.innerHTML = list.length ? list.map((sale) => `<tr><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td><button type="button" class="secondary" data-sale-act="view" data-sale-id="${sale.id}">Ver Venta</button> <button type="button" class="secondary" data-sale-act="invoice" data-sale-id="${sale.id}">Ver factura</button>${hasPermission('deleteSales') ? ` <button type="button" class="secondary" data-sale-act="edit" data-sale-id="${sale.id}">Editar venta</button> <button type="button" class="secondary" data-sale-act="del" data-sale-id="${sale.id}">Eliminar venta</button>` : ''}</td><td>${sale.user}</td></tr>`).join('') : '<tr><td colspan="6">Sin ventas.</td></tr>';
 }
 
 
@@ -3249,6 +3380,7 @@ async function registerSale() {
   state.currentCart.forEach((item) => { for (let i = 0; i < item.qty; i += 1) deliveryItems.push({ name: formatProductWithComboText(item), delivered: false, deliveredBy: '' }); });
   const activeCashBoxId = state.activeCashBoxId;
   const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber: state.cashSession?.orderCounter || 1, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
+  sale.invoiceSnapshot = buildInvoiceData(sale);
   if (state.cashSession) state.cashSession.orderCounter = (state.cashSession.orderCounter || 1) + 1;
   if (isStockEnabled()) {
     for (const item of state.currentCart) {
@@ -3273,6 +3405,7 @@ async function registerSale() {
   state.sales.unshift(sale);
   state.currentCart = [];
   persist();
+  if (billingSettings().enabled) setTimeout(() => openSaleInvoiceWindow(sale), 120);
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
@@ -3388,6 +3521,7 @@ function showSettingsView(view) {
   userManagerCard?.classList.add('hidden');
   databaseConfigCard?.classList.add('hidden');
   salesConfigCard?.classList.add('hidden');
+  billingConfigCard?.classList.add('hidden');
   settingsMenuCard?.classList.add('hidden');
   view?.classList.remove('hidden');
 }
@@ -3471,7 +3605,7 @@ function normalizeRoute(routeLike) {
 function parentRoute(route) {
   if (route === 'home') return 'home';
   if (route === 'settings') return 'home';
-  if (route in { 'settings/main':1, 'settings/sales':1, 'settings/users':1, 'settings/users/activity':1, 'stock':1, 'warehouse':1, 'warehouse/gestion':1, 'warehouse/movimientos':1, 'warehouse/movimientos/archivados':1, 'pos/ventas':1, 'pos/pedidos':1, 'pos/configVentas':1, 'pos/deudas':1, 'pos/resumen':1, 'cash/closings':1, 'sales-mode':1 }) return route.startsWith('settings/') ? 'settings' : 'home';
+  if (route in { 'settings/main':1, 'settings/sales':1, 'settings/billing':1, 'settings/users':1, 'settings/users/activity':1, 'stock':1, 'warehouse':1, 'warehouse/gestion':1, 'warehouse/movimientos':1, 'warehouse/movimientos/archivados':1, 'pos/ventas':1, 'pos/pedidos':1, 'pos/configVentas':1, 'pos/deudas':1, 'pos/resumen':1, 'cash/closings':1, 'sales-mode':1 }) return route.startsWith('settings/') ? 'settings' : 'home';
   if (route.startsWith('settings/users/edit/') || route === 'settings/users/new') return 'settings/users';
   if (route === 'settings/users/activity') return 'settings/users';
   if (route.startsWith('warehouse/movimientos/archivados/')) return 'warehouse/movimientos/archivados';
@@ -3563,6 +3697,7 @@ function renderRoute(route) {
   }
   if (route === 'settings/main') { renderRoute('settings'); showSettingsView(mainConfigCard); enforceSingleActiveView(route); return; }
   if (route === 'settings/sales') { renderRoute('settings'); syncTempConfigFromApp(); showSettingsView(salesConfigCard); enforceSingleActiveView(route); return; }
+  if (route === 'settings/billing') { renderRoute('settings'); showSettingsView(billingConfigCard); applySettings(); enforceSingleActiveView(route); return; }
   if (route === 'settings/users') { renderRoute('settings'); renderUsers(); showSettingsView(userManagerCard); closeUserFormView(); enforceSingleActiveView(route); return; }
   if (route === 'settings/users/activity') { renderRoute('settings/users'); renderUsersActivityView(); enforceSingleActiveView(route); return; }
   if (route === 'settings/users/new') { renderRoute('settings/users'); openUserFormView(); enforceSingleActiveView(route); return; }
@@ -3627,6 +3762,7 @@ function showSettingsMenu() {
   userManagerCard?.classList.add('hidden');
   databaseConfigCard?.classList.add('hidden');
   salesConfigCard?.classList.add('hidden');
+  billingConfigCard?.classList.add('hidden');
   settingsMenuCard?.classList.remove('hidden');
 }
 
@@ -3671,6 +3807,38 @@ function saveMainSettings() {
 }
 
 
+
+function saveBillingSettings() {
+  if (!hasPermission('accessSettings')) return setMsg(homeMessage, 'No tienes permiso para facturación.', false);
+  const billing = normalizeBillingSettings();
+  billing.enabled = Boolean(billingEnabledInput?.checked);
+  billing.title = String(billingTitleInput?.value || billing.title || 'CAFETERIA SH82').trim() || 'CAFETERIA SH82';
+  billing.currencySymbol = String(billingCurrencyInput?.value || billing.currencySymbol || 'Bs').trim() || 'Bs';
+  billing.paperWidthMm = Math.max(58, Math.min(120, Number(billingPaperWidthInput?.value || billing.paperWidthMm || 80)));
+  billing.marginMm = Math.max(0, Math.min(20, Number(billingMarginInput?.value || billing.marginMm || 4)));
+  billing.message1 = String(billingMessage1Input?.value || '').trim();
+  billing.message2 = String(billingMessage2Input?.value || '').trim();
+  const applyPersist = () => {
+    state.settings.billing = { ...billing };
+    persist();
+    if (billingConfigStatus) billingConfigStatus.textContent = 'Configuración de facturación guardada y sincronizada.';
+  };
+  const file = billingLogoInput?.files?.[0];
+  if (!file) {
+    applyPersist();
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    billing.logoDataUrl = String(reader.result || '');
+    if (billingLogoInput) billingLogoInput.value = '';
+    applyPersist();
+  };
+  reader.onerror = () => {
+    if (billingConfigStatus) billingConfigStatus.textContent = 'No se pudo leer el logo de facturación.';
+  };
+  reader.readAsDataURL(file);
+}
 
 function openFinalizedOrderEditModal(orderId) {
   const sale = state.sales.find((s) => s.id === orderId);
@@ -3853,17 +4021,28 @@ function wireEvents() {
   openMainConfigBtn?.addEventListener('click', () => navigateTo('settings/main'));
   openUsersConfigBtn?.addEventListener('click', () => navigateTo('settings/users'));
   openSalesConfigBtn?.addEventListener('click', () => navigateTo('settings/sales'));
+  openBillingConfigBtn?.addEventListener('click', () => navigateTo('settings/billing'));
   enableStockBtn?.addEventListener('click', () => { tempConfig.stockActivo = true; if (salesConfigStatus) salesConfigStatus.textContent = 'Cambio pendiente: Stock ACTIVADO'; });
   disableStockBtn?.addEventListener('click', () => { tempConfig.stockActivo = false; if (salesConfigStatus) salesConfigStatus.textContent = 'Cambio pendiente: Stock DESACTIVADO'; });
   enableOrdersBtn?.addEventListener('click', () => { tempConfig.activarPedidos = true; if (salesConfigStatus) salesConfigStatus.textContent = 'Cambio pendiente: Pedidos ACTIVADOS'; });
   disableOrdersBtn?.addEventListener('click', () => { tempConfig.activarPedidos = false; if (salesConfigStatus) salesConfigStatus.textContent = 'Cambio pendiente: Pedidos DESACTIVADOS'; });
   applySalesConfigBtn?.addEventListener('click', () => saveMainSettings());
+  saveBillingConfigBtn?.addEventListener('click', saveBillingSettings);
+  removeBillingLogoBtn?.addEventListener('click', () => {
+    const billing = normalizeBillingSettings();
+    billing.logoDataUrl = '';
+    state.settings.billing = { ...billing };
+    persist();
+    if (billingConfigStatus) billingConfigStatus.textContent = 'Logo de facturación eliminado.';
+    applySettings();
+  });
   openDatabaseConfigBtn?.classList.add('hidden');
   syncNowBtn?.addEventListener('click', async () => { await syncToCloud(); if (syncStatus) syncStatus.textContent = 'Sincronizado con Firebase.'; });
   backFromMainConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   backFromUsersConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   backFromDatabaseConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   backFromSalesConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
+  backFromBillingConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   toggleUserFormBtn?.addEventListener('click', () => navigateTo('settings/users/new'));
   backFromUserFormBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   selectAllUserPermsBtn?.addEventListener('click', () => { permissionInputIds().forEach((id) => { const el = document.getElementById(id); if (el) el.checked = true; }); });
@@ -4124,6 +4303,10 @@ function wireEvents() {
     if (!sale) return;
     if (b.dataset.saleAct === 'view') {
       alert(`Pedido #${orderNumberLabel(sale.orderNumber)}\nFecha: ${new Date(sale.createdAt).toLocaleString()}\nUsuario: ${sale.user}\nMétodo: ${sale.payment}\nTotal: ${money(sale.total)}\nProductos: ${sale.items.map((i) => `${i.name} x${i.qty}`).join(', ')}`);
+      return;
+    }
+    if (b.dataset.saleAct === 'invoice') {
+      openSaleInvoiceWindow(sale);
       return;
     }
     if (b.dataset.saleAct === 'edit') {
