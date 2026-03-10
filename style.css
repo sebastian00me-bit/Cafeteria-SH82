@@ -59,10 +59,3 @@ body.with-top-navigation main,body.with-top-navigation #stockScreen{padding-top:
 .upload-progress{height:8px;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:#f3f6fa;}
 .upload-progress span{display:block;height:100%;background:var(--accent);}
 .upload-error{margin-top:.25rem;font-size:.78rem;color:var(--danger);}
-
-.billing-list{display:grid;gap:.75rem;margin:.6rem 0 1rem;}
-.billing-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.75rem;padding:.7rem;border:1px solid var(--border);border-radius:10px;background:#fff;}
-.billing-main{display:grid;gap:.45rem;}
-.billing-main strong{font-size:.95rem;}
-.billing-actions{display:grid;align-content:start;gap:.45rem;min-width:170px;}
-@media (max-width:760px){.billing-row{grid-template-columns:1fr;}.billing-actions{min-width:0;}}
