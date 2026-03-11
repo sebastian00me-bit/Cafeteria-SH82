@@ -14,7 +14,8 @@ const state = {
   removedPeopleIds: JSON.parse(localStorage.getItem('cafeteria_removed_people_ids') || '[]'),
   userSalesModes: JSON.parse(localStorage.getItem('cafeteria_user_sales_modes') || '{}'),
   touchUiConfigByUser: JSON.parse(localStorage.getItem('cafeteria_touch_ui_config_by_user') || '{}'),
-  categoryImages: JSON.parse(localStorage.getItem('cafeteria_category_images') || '{}')
+  categoryImages: JSON.parse(localStorage.getItem('cafeteria_category_images') || '{}'),
+  orderCounters: JSON.parse(localStorage.getItem('cafeteria_order_counters') || '{}')
 };
 
 let sessionWatchInterval = null;
@@ -543,6 +544,7 @@ function saveLocalState() {
   safeLocalSet('cafeteria_user_sales_modes', JSON.stringify(state.userSalesModes || {}));
   safeLocalSet('cafeteria_touch_ui_config_by_user', JSON.stringify(state.touchUiConfigByUser || {}));
   safeLocalSet('cafeteria_category_images', JSON.stringify(categoryImagesForLocalPersistence()));
+  safeLocalSet('cafeteria_order_counters', JSON.stringify(state.orderCounters || {}));
 }
 
 function scheduleCloudSync(delayMs = 1200) {
@@ -551,6 +553,74 @@ function scheduleCloudSync(delayMs = 1200) {
     cloudSyncTimer = null;
     syncToCloud().catch((err) => console.error('[sync] scheduled sync failed', err));
   }, Math.max(200, Number(delayMs || 1200)));
+}
+
+
+function cloudRootUrl() {
+  const base = String(state.settings?.firebaseDbUrl || '').replace(/\/$/, '');
+  if (!base) return '';
+  const token = state.settings?.firebaseDbToken ? `?auth=${encodeURIComponent(state.settings.firebaseDbToken)}` : '';
+  return `${base}/${state.settings.firebaseDbPath || SHARED_DB_PATH}.json${token}`;
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('No se pudo convertir imagen.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function migrateCategoryImageRefsToDataUrls() {
+  const entries = Object.entries(state.categoryImages || {}).filter(([, value]) => String(value || '').startsWith('idb:'));
+  if (!entries.length) return false;
+  let changed = false;
+  for (const [category, ref] of entries) {
+    try {
+      const blob = await imageDbGet(String(ref).slice(4));
+      if (!blob) continue;
+      state.categoryImages[category] = await blobToDataUrl(blob);
+      changed = true;
+    } catch {}
+  }
+  if (changed) persist();
+  return changed;
+}
+
+async function reserveNextOrderNumber(cashBoxId) {
+  const fallback = () => {
+    const lastIssued = Number(state.orderCounters?.[cashBoxId] || 0);
+    const sessionCandidate = Number(state.cashSession?.orderCounter || 1);
+    const next = lastIssued > 0 ? (lastIssued + 1) : (sessionCandidate > 0 ? sessionCandidate : 1);
+    state.orderCounters = state.orderCounters || {};
+    state.orderCounters[cashBoxId] = next;
+    if (state.cashSession && state.cashSession.id === cashBoxId) state.cashSession.orderCounter = next + 1;
+    return next;
+  };
+  const root = cloudRootUrl();
+  if (!root || !cashBoxId) return fallback();
+  const counterPath = encodeURIComponent(cashBoxId);
+  const counterUrl = root.replace(/\.json(\?.*)?$/, `/orderCounters/${counterPath}.json$1`);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const getResp = await fetch(counterUrl, { headers: { 'X-Firebase-ETag': 'true' } });
+    if (!getResp.ok) break;
+    const etag = getResp.headers.get('ETag') || '*';
+    const current = Number(await getResp.json()) || 0;
+    const next = current + 1;
+    const putResp = await fetch(counterUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'if-match': etag },
+      body: JSON.stringify(next)
+    });
+    if (putResp.status === 412) continue;
+    if (!putResp.ok) break;
+    state.orderCounters = state.orderCounters || {};
+    state.orderCounters[cashBoxId] = next;
+    if (state.cashSession && state.cashSession.id === cashBoxId) state.cashSession.orderCounter = next + 1;
+    return next;
+  }
+  return fallback();
 }
 
 function persist(options = {}) {
@@ -1304,11 +1374,7 @@ function openImageUploadForCategory(categoryName) {
     if (input) input.value = '';
     beginImageUpload('category', categoryName, f, async (payload) => {
       const previous = state.categoryImages[categoryName] || '';
-      try {
-        state.categoryImages[categoryName] = await saveImageFileToStorage(payload.file, previous);
-      } catch {
-        state.categoryImages[categoryName] = payload.dataUrl || previous;
-      }
+      state.categoryImages[categoryName] = payload.dataUrl || previous;
       const ok = persistImageChange(() => {
         if (previous) state.categoryImages[categoryName] = previous;
         else delete state.categoryImages[categoryName];
@@ -3181,6 +3247,7 @@ function snapshotPayload() {
     userSalesModes: state.userSalesModes || {},
     touchUiConfigByUser: state.touchUiConfigByUser || {},
     categoryImages: state.categoryImages || {},
+    orderCounters: state.orderCounters || {},
     updatedAt: Date.now()
   };
 }
@@ -3237,7 +3304,7 @@ async function pullFromCloud(options = {}) {
     }
     state.lastSyncAt = Number(data.updatedAt || Date.now());
     state.forceLogoutAt = Number(data.forceLogoutAt || 0);
-    ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages'].forEach((k) => {
+    ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters'].forEach((k) => {
       if (data[k] !== undefined) state[k] = data[k];
     });
     normalizeCloudSettings();
@@ -3618,9 +3685,9 @@ async function registerSale() {
   const deliveryItems = [];
   state.currentCart.forEach((item) => { for (let i = 0; i < item.qty; i += 1) deliveryItems.push({ name: formatProductWithComboText(item), delivered: false, deliveredBy: '' }); });
   const activeCashBoxId = state.activeCashBoxId;
-  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber: state.cashSession?.orderCounter || 1, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
+  const orderNumber = await reserveNextOrderNumber(activeCashBoxId);
+  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
   sale.invoiceSnapshot = buildInvoiceData(sale);
-  if (state.cashSession) state.cashSession.orderCounter = (state.cashSession.orderCounter || 1) + 1;
   if (isStockEnabled()) {
     for (const item of state.currentCart) {
       const p = state.products.find((x) => x.id === item.id);
@@ -3643,8 +3710,20 @@ async function registerSale() {
   applyWarehouseImpactFromSaleItems(sale.items, { reverse: false, saleId: `#${orderNumberLabel(sale.orderNumber)}` });
   state.sales.unshift(sale);
   state.currentCart = [];
-  persist();
-  scheduleCloudSync(150);
+  persist({ sync: false });
+  try {
+    await syncToCloud();
+    await pullFromCloud({ force: true });
+    if (!state.sales.some((x) => x.id === sale.id)) {
+      state.sales.unshift(sale);
+      persist({ sync: false });
+      await syncToCloud();
+      await pullFromCloud({ force: true });
+    }
+  } catch (err) {
+    console.error('[sale] sync failed', err);
+    scheduleCloudSync(250);
+  }
   const billingCfg = billingSettings();
   if (billingCfg.enabled) {
     Promise.resolve(openSaleInvoiceWindow(sale, { syncBeforeOpen: false, autoPrint: Boolean(billingCfg.autoPrintEnabled) }))
@@ -4895,6 +4974,7 @@ async function bootstrap() {
   if (!state.userSalesModes || typeof state.userSalesModes !== 'object') state.userSalesModes = {};
   if (!state.touchUiConfigByUser || typeof state.touchUiConfigByUser !== 'object') state.touchUiConfigByUser = {};
   if (!state.categoryImages || typeof state.categoryImages !== 'object') state.categoryImages = {};
+  if (!state.orderCounters || typeof state.orderCounters !== 'object') state.orderCounters = {};
   normalizeWarehouseData();
   normalizeDebtPaymentsData();
   normalizeCashState();
@@ -4923,6 +5003,9 @@ async function bootstrap() {
   window.addEventListener('storage', (e) => { if (!e.key || !e.key.startsWith('cafeteria_')) return; pullFromCloud({ force: true }); });
   window.addEventListener('hashchange', () => { if (applyingRoute) return; applyRoute(); });
   setInterval(() => { if (document.hidden) return; pullFromCloud(); }, 5000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pullFromCloud({ force: true }); });
+  window.addEventListener('online', () => { pullFromCloud({ force: true }); });
+  Promise.resolve().then(() => migrateCategoryImageRefsToDataUrls()).catch(() => {});
   Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
   maybeForceLogoutFromClosure();
   if (state.currentUser && validSession && validateSessionPolicy({ silent: true })) {
