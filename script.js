@@ -357,7 +357,7 @@ let appConfig = {
 let cloudPullInFlight = null;
 let cloudSyncTimer = null;
 let lastCloudPullAt = 0;
-const CLOUD_PULL_MIN_INTERVAL_MS = 30000;
+const CLOUD_PULL_MIN_INTERVAL_MS = 5000;
 
 function syncAppConfig() {
   appConfig = {
@@ -3431,7 +3431,6 @@ function openStartCashModal() {
 }
 
 async function startCashSession(openingAmount = 0) {
-  await pullFromCloud({ force: true });
   console.info('[cash] startCashSession()', { openingAmount, user: state.currentUser?.username || '-' });
   if (!canStartOrCloseCash()) {
     console.warn('[cash] bloqueo por permisos');
@@ -3551,11 +3550,7 @@ async function closeCashSession() {
     }
     switchToPos('ventas');
     showHome();
-    try {
-      await syncToCloud();
-    } catch (err) {
-      console.error('[cash] sync close failed', err);
-    }
+    Promise.resolve(syncToCloud()).catch((err) => console.error('[cash] sync close failed', err));
     setMsg(homeMessage, 'La caja ha sido cerrada.', false);
   } catch (err) {
     console.error('[cash] closeCashSession error', err);
@@ -3649,6 +3644,7 @@ async function registerSale() {
   state.sales.unshift(sale);
   state.currentCart = [];
   persist();
+  scheduleCloudSync(150);
   const billingCfg = billingSettings();
   if (billingCfg.enabled) {
     Promise.resolve(openSaleInvoiceWindow(sale, { syncBeforeOpen: false, autoPrint: Boolean(billingCfg.autoPrintEnabled) }))
@@ -4891,7 +4887,6 @@ function wireEvents() {
 
 async function bootstrap() {
   normalizeCloudSettings();
-  await pullFromCloud({ force: true });
   ensureUsers();
   ensureSeedData();
   ensureProductStockDefaults();
@@ -4927,7 +4922,8 @@ async function bootstrap() {
   const validSession = Boolean(state.currentUser && currentUserRecord());
   window.addEventListener('storage', (e) => { if (!e.key || !e.key.startsWith('cafeteria_')) return; pullFromCloud({ force: true }); });
   window.addEventListener('hashchange', () => { if (applyingRoute) return; applyRoute(); });
-  setInterval(() => { if (document.hidden) return; pullFromCloud(); }, 10000);
+  setInterval(() => { if (document.hidden) return; pullFromCloud(); }, 5000);
+  Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
   maybeForceLogoutFromClosure();
   if (state.currentUser && validSession && validateSessionPolicy({ silent: true })) {
     navStack = ['home'];
