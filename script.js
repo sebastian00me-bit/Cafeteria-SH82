@@ -359,8 +359,8 @@ let appConfig = {
 let cloudPullInFlight = null;
 let cloudSyncTimer = null;
 let lastCloudPullAt = 0;
-const CLOUD_PULL_MIN_INTERVAL_MS = 800;
-const CLOUD_POLL_INTERVAL_MS = 1200;
+const CLOUD_PULL_MIN_INTERVAL_MS = 500;
+const CLOUD_POLL_INTERVAL_MS = 700;
 
 function syncAppConfig() {
   appConfig = {
@@ -3320,7 +3320,7 @@ function mergeCashBoxes(remoteBoxes = [], localBoxes = []) {
   return [...map.values()];
 }
 
-async function syncToCloud() {
+async function syncToCloud(options = {}) {
   if (!state.settings.firebaseDbUrl) return;
   try {
     const token = state.settings.firebaseDbToken ? `?auth=${encodeURIComponent(state.settings.firebaseDbToken)}` : '';
@@ -3329,12 +3329,6 @@ async function syncToCloud() {
     const remoteData = await remoteResp.json();
     const remoteEtag = remoteResp.headers.get('ETag');
     const remoteUpdatedAt = Number(remoteData?.updatedAt || 0);
-    if (remoteUpdatedAt && remoteUpdatedAt > Number(state.lastSyncAt || 0)) {
-      await pullFromCloud({ force: true });
-      if (syncStatus) syncStatus.textContent = 'Sincronización remota más reciente detectada. Estado actualizado sin sobrescribir.';
-      return;
-    }
-
     const payload = snapshotPayload();
     const mergedDeleted = mergeDeletedRecordIds(remoteData?.deletedRecordIds, payload.deletedRecordIds);
     payload.deletedRecordIds = mergedDeleted;
@@ -3354,8 +3348,8 @@ async function syncToCloud() {
     if (remoteEtag) putHeaders['if-match'] = remoteEtag;
     const putResp = await fetch(url, { method: 'PUT', headers: putHeaders, body: JSON.stringify(payload) });
     if (putResp.status === 412) {
-      await pullFromCloud({ force: true });
-      if (syncStatus) syncStatus.textContent = 'Conflicto detectado. Se actualizó estado remoto sin sobrescribir.';
+      if (Number(options.attempt || 0) < 2) return syncToCloud({ ...options, attempt: Number(options.attempt || 0) + 1 });
+      if (syncStatus) syncStatus.textContent = 'Conflicto detectado. Reintenta sincronizar.';
       return;
     }
     if (!putResp.ok) throw new Error(`sync put failed: ${putResp.status}`);
@@ -5109,7 +5103,11 @@ async function bootstrap() {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pullFromCloud({ force: true }); });
   window.addEventListener('online', () => { pullFromCloud({ force: true }); });
   Promise.resolve().then(() => migrateCategoryImageRefsToDataUrls()).catch(() => {});
-  Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
+  if (state.currentUser && validSession) {
+    try { await pullFromCloud({ force: true }); } catch {}
+  } else {
+    Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
+  }
   maybeForceLogoutFromClosure();
   if (state.currentUser && validSession && validateSessionPolicy({ silent: true })) {
     navStack = ['home'];
