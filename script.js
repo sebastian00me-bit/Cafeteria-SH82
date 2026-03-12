@@ -15,7 +15,8 @@ const state = {
   userSalesModes: JSON.parse(localStorage.getItem('cafeteria_user_sales_modes') || '{}'),
   touchUiConfigByUser: JSON.parse(localStorage.getItem('cafeteria_touch_ui_config_by_user') || '{}'),
   categoryImages: JSON.parse(localStorage.getItem('cafeteria_category_images') || '{}'),
-  orderCounters: JSON.parse(localStorage.getItem('cafeteria_order_counters') || '{}')
+  orderCounters: JSON.parse(localStorage.getItem('cafeteria_order_counters') || '{}'),
+  deletedRecordIds: JSON.parse(localStorage.getItem('cafeteria_deleted_record_ids') || '{"cashClosings":[],"sales":[]}')
 };
 
 let sessionWatchInterval = null;
@@ -545,6 +546,7 @@ function saveLocalState() {
   safeLocalSet('cafeteria_touch_ui_config_by_user', JSON.stringify(state.touchUiConfigByUser || {}));
   safeLocalSet('cafeteria_category_images', JSON.stringify(categoryImagesForLocalPersistence()));
   safeLocalSet('cafeteria_order_counters', JSON.stringify(state.orderCounters || {}));
+  safeLocalSet('cafeteria_deleted_record_ids', JSON.stringify(state.deletedRecordIds || { cashClosings: [], sales: [] }));
 }
 
 function scheduleCloudSync(delayMs = 1200) {
@@ -631,7 +633,7 @@ function persist(options = {}) {
 }
 
 function defaultPermissions() {
-  return { closeCash: true, deleteSales: true, accessSettings: true, manageProducts: true, manageCombos: true, editProductPrices: true, viewOrders: true, deleteClosings: true, deleteCashMovements: true, clearDeletedSalesHistory: true, manageUsers: true, viewSalesButton: true, viewSettingsButton: true, viewCloseCashButton: true, viewProductsTab: true, viewConfigVentasTab: true, viewDebtorsTab: true, viewSummaryTab: true, viewClosingsTab: true, viewWarehouseButton: true, viewSalesModeButton: true };
+  return { openCash: true, closeCash: true, deleteSales: true, accessSettings: true, manageProducts: true, manageCombos: true, editProductPrices: true, viewOrders: true, deleteClosings: true, deleteCashMovements: true, clearDeletedSalesHistory: true, manageUsers: true, viewSalesButton: true, viewSettingsButton: true, viewCloseCashButton: true, viewProductsTab: true, viewConfigVentasTab: true, viewDebtorsTab: true, viewSummaryTab: true, viewClosingsTab: true, viewWarehouseButton: true, viewSalesModeButton: true };
 }
 
 function ensureUsers() {
@@ -662,7 +664,11 @@ function hasPermission(key) {
   return Boolean(u.permissions?.[key]);
 }
 
-function canStartOrCloseCash() {
+function canOpenCash() {
+  return hasPermission('openCash') || hasPermission('authorizeCash');
+}
+
+function canCloseCash() {
   return hasPermission('closeCash') || hasPermission('authorizeCash');
 }
 
@@ -2049,8 +2055,8 @@ function renderUsers() {
   if (!usersTable) return;
   document.getElementById('backFromUsersActivityBtn')?.remove();
   const head = usersTable.closest('table')?.querySelector('thead tr');
-  if (head) head.innerHTML = '<th>Usuario</th><th>Autoriza</th><th>Cerrar caja</th><th>Eliminar ventas</th><th>Config. principal</th><th>Productos</th><th>Eliminar cierres</th><th>Eliminar mov. caja</th><th>Vaciar eliminadas</th><th>Gestionar usuarios</th><th>Acción</th>';
-  usersTable.innerHTML = state.users.map((u) => `<tr><td>${u.username}</td><td>${u.permissions?.authorizeCash ? 'Sí' : 'No'}</td><td>${u.permissions?.closeCash ? 'Sí' : 'No'}</td><td>${u.permissions?.deleteSales ? 'Sí' : 'No'}</td><td>${u.permissions?.accessSettings ? 'Sí' : 'No'}</td><td>${u.permissions?.manageProducts ? 'Sí' : 'No'}</td><td>${u.permissions?.deleteClosings ? 'Sí' : 'No'}</td><td>${u.permissions?.deleteCashMovements ? 'Sí' : 'No'}</td><td>${u.permissions?.clearDeletedSalesHistory ? 'Sí' : 'No'}</td><td>${u.permissions?.manageUsers ? 'Sí' : 'No'}</td><td><button class="secondary" data-user-edit="${u.username}" type="button">Editar</button> <button class="secondary" data-user-del="${u.username}" type="button">Eliminar</button> <button class="secondary" data-user-toggle-enabled="${u.username}" type="button">${u.enabled === false ? 'Habilitar' : 'Inhabilitar'}</button></td></tr>`).join('');
+  if (head) head.innerHTML = '<th>Usuario</th><th>Autoriza</th><th>Abrir caja</th><th>Cerrar caja</th><th>Eliminar ventas</th><th>Config. principal</th><th>Productos</th><th>Eliminar cierres</th><th>Eliminar mov. caja</th><th>Vaciar eliminadas</th><th>Gestionar usuarios</th><th>Acción</th>';
+  usersTable.innerHTML = state.users.map((u) => `<tr><td>${u.username}</td><td>${u.permissions?.authorizeCash ? 'Sí' : 'No'}</td><td>${u.permissions?.openCash ? 'Sí' : 'No'}</td><td>${u.permissions?.closeCash ? 'Sí' : 'No'}</td><td>${u.permissions?.deleteSales ? 'Sí' : 'No'}</td><td>${u.permissions?.accessSettings ? 'Sí' : 'No'}</td><td>${u.permissions?.manageProducts ? 'Sí' : 'No'}</td><td>${u.permissions?.deleteClosings ? 'Sí' : 'No'}</td><td>${u.permissions?.deleteCashMovements ? 'Sí' : 'No'}</td><td>${u.permissions?.clearDeletedSalesHistory ? 'Sí' : 'No'}</td><td>${u.permissions?.manageUsers ? 'Sí' : 'No'}</td><td><button class="secondary" data-user-edit="${u.username}" type="button">Editar</button> <button class="secondary" data-user-del="${u.username}" type="button">Eliminar</button> <button class="secondary" data-user-toggle-enabled="${u.username}" type="button">${u.enabled === false ? 'Habilitar' : 'Inhabilitar'}</button></td></tr>`).join('');
   if (userManagerCard && !document.getElementById('openUsersActivityBtn')) {
     const btn = document.createElement('button');
     btn.id = 'openUsersActivityBtn';
@@ -3248,8 +3254,62 @@ function snapshotPayload() {
     touchUiConfigByUser: state.touchUiConfigByUser || {},
     categoryImages: state.categoryImages || {},
     orderCounters: state.orderCounters || {},
+    deletedRecordIds: state.deletedRecordIds || { cashClosings: [], sales: [] },
     updatedAt: Date.now()
   };
+}
+
+
+function mergeByIdPreferRemote(remoteList = [], localList = [], tombstones = []) {
+  const map = new Map();
+  const removed = new Set((tombstones || []).map((x) => String(x)));
+  (remoteList || []).forEach((item) => {
+    if (!item?.id) return;
+    if (removed.has(String(item.id))) return;
+    map.set(String(item.id), item);
+  });
+  (localList || []).forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key)) return;
+    if (!map.has(key)) map.set(key, item);
+  });
+  return [...map.values()];
+}
+
+function mergeDeletedRecordIds(remoteDeleted = {}, localDeleted = {}) {
+  const keys = ['cashClosings', 'sales'];
+  const out = {};
+  keys.forEach((key) => {
+    const remote = Array.isArray(remoteDeleted?.[key]) ? remoteDeleted[key] : [];
+    const local = Array.isArray(localDeleted?.[key]) ? localDeleted[key] : [];
+    out[key] = [...new Set([...remote, ...local].map((x) => String(x)).filter(Boolean))];
+  });
+  return out;
+}
+
+function cashBoxTimelineValue(box) {
+  if (!box || typeof box !== 'object') return 0;
+  return Date.parse(box.fecha_cierre || box.fecha_apertura || '') || 0;
+}
+
+function mergeCashBoxes(remoteBoxes = [], localBoxes = []) {
+  const map = new Map();
+  (remoteBoxes || []).forEach((box) => { if (box?.id) map.set(String(box.id), box); });
+  (localBoxes || []).forEach((box) => {
+    if (!box?.id) return;
+    const key = String(box.id);
+    const remote = map.get(key);
+    if (!remote) {
+      map.set(key, box);
+      return;
+    }
+    const remoteScore = cashBoxTimelineValue(remote);
+    const localScore = cashBoxTimelineValue(box);
+    if (localScore > remoteScore) map.set(key, box);
+    else if (localScore === remoteScore && remote.estado !== 'CERRADA' && box.estado === 'CERRADA') map.set(key, box);
+  });
+  return [...map.values()];
 }
 
 async function syncToCloud() {
@@ -3268,6 +3328,19 @@ async function syncToCloud() {
     }
 
     const payload = snapshotPayload();
+    const mergedDeleted = mergeDeletedRecordIds(remoteData?.deletedRecordIds, payload.deletedRecordIds);
+    payload.deletedRecordIds = mergedDeleted;
+    payload.sales = mergeByIdPreferRemote(remoteData?.sales, payload.sales, mergedDeleted.sales);
+    payload.cashClosings = mergeByIdPreferRemote(remoteData?.cashClosings, payload.cashClosings, mergedDeleted.cashClosings);
+    payload.deletedSales = mergeByIdPreferRemote(remoteData?.deletedSales, payload.deletedSales);
+    payload.outflows = mergeByIdPreferRemote(remoteData?.outflows, payload.outflows);
+    payload.debtPayments = mergeByIdPreferRemote(remoteData?.debtPayments, payload.debtPayments);
+    payload.cashBoxes = mergeCashBoxes(remoteData?.cashBoxes, payload.cashBoxes);
+    if (!payload.activeCashBoxId && remoteData?.activeCashBoxId) payload.activeCashBoxId = remoteData.activeCashBoxId;
+    if (payload.systemStatus === 'CAJA_CERRADA' && remoteData?.systemStatus === 'CAJA_ABIERTA' && payload.activeCashBoxId === remoteData.activeCashBoxId) {
+      payload.systemStatus = remoteData.systemStatus;
+      payload.cashSession = remoteData.cashSession || payload.cashSession;
+    }
     if (remoteUpdatedAt && Number(payload.updatedAt || 0) <= remoteUpdatedAt) payload.updatedAt = remoteUpdatedAt + 1;
     const putHeaders = { 'Content-Type': 'application/json' };
     if (remoteEtag) putHeaders['if-match'] = remoteEtag;
@@ -3304,7 +3377,7 @@ async function pullFromCloud(options = {}) {
     }
     state.lastSyncAt = Number(data.updatedAt || Date.now());
     state.forceLogoutAt = Number(data.forceLogoutAt || 0);
-    ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters'].forEach((k) => {
+    ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters','deletedRecordIds'].forEach((k) => {
       if (data[k] !== undefined) state[k] = data[k];
     });
     normalizeCloudSettings();
@@ -3312,6 +3385,10 @@ async function pullFromCloud(options = {}) {
     normalizeDebtPaymentsData();
     normalizePeopleData();
     normalizeCashState();
+    const removedClosings = new Set((state.deletedRecordIds?.cashClosings || []).map((x) => String(x)));
+    const removedSales = new Set((state.deletedRecordIds?.sales || []).map((x) => String(x)));
+    if (removedClosings.size) state.cashClosings = (state.cashClosings || []).filter((x) => !removedClosings.has(String(x?.id || '')));
+    if (removedSales.size) state.sales = (state.sales || []).filter((x) => !removedSales.has(String(x?.id || '')));
   syncAppConfig();
     console.info('[cloud] estado sincronizado', { activeCashBoxId: state.activeCashBoxId, systemStatus: state.systemStatus });
     saveLocalState();
@@ -3335,8 +3412,8 @@ async function pullFromCloud(options = {}) {
 function renderHomeActions() {
   const active = isCashOpen();
   if (goSalesBtn) goSalesBtn.classList.toggle('hidden', !active || !hasPermission('viewSalesButton'));
-  if (closeCashBtn) closeCashBtn.classList.toggle('hidden', !active || !canStartOrCloseCash() || !hasPermission('viewCloseCashButton'));
-  if (startCashBtn) startCashBtn.classList.toggle('hidden', active || !canStartOrCloseCash());
+  if (closeCashBtn) closeCashBtn.classList.toggle('hidden', !active || !canCloseCash() || !hasPermission('viewCloseCashButton'));
+  if (startCashBtn) startCashBtn.classList.toggle('hidden', active || !canOpenCash());
   if (openSettingsBtn) openSettingsBtn.classList.toggle('hidden', !hasPermission('accessSettings') || !hasPermission('viewSettingsButton'));
   if (goCashClosingsBtn) goCashClosingsBtn.classList.toggle('hidden', !hasPermission('viewClosingsTab'));
   if (goWarehouseBtn) goWarehouseBtn.classList.toggle('hidden', !hasPermission('viewWarehouseButton'));
@@ -3473,7 +3550,7 @@ function closeStartCashModal() {
 
 function openStartCashModal() {
   console.info('[cash] click Abrir Caja');
-  if (!canStartOrCloseCash()) {
+  if (!canOpenCash()) {
     console.warn('[cash] usuario sin permisos para abrir caja');
     setMsg(homeMessage, 'No tienes permiso para abrir caja.', false);
     return;
@@ -3499,7 +3576,7 @@ function openStartCashModal() {
 
 async function startCashSession(openingAmount = 0) {
   console.info('[cash] startCashSession()', { openingAmount, user: state.currentUser?.username || '-' });
-  if (!canStartOrCloseCash()) {
+  if (!canOpenCash()) {
     console.warn('[cash] bloqueo por permisos');
     return setMsg(homeMessage, 'No tienes permiso para abrir caja.', false);
   }
@@ -3552,7 +3629,7 @@ async function closeCashSession() {
   if (!state.currentUser || !currentUserRecord()) {
     return setMsg(homeMessage, 'Sesión inválida. Vuelve a iniciar sesión.', false);
   }
-  if (!canStartOrCloseCash()) return setMsg(homeMessage, 'No tienes permiso para cerrar caja.', false);
+  if (!canCloseCash()) return setMsg(homeMessage, 'No tienes permiso para cerrar caja.', false);
   try {
     const activeCash = getActiveCashBox();
     if (!activeCash) return setMsg(homeMessage, 'No hay caja abierta para cerrar.', false);
@@ -3902,6 +3979,7 @@ function permissionSchema() {
     { key: 'viewWarehouseButton', label: 'Puede ver botón Almacén' },
     { key: 'viewSalesModeButton', label: 'Puede ver el botón Modo de ventas' },
     { key: 'deleteSales', label: 'Puede eliminar ventas' },
+    { key: 'openCash', label: 'Puede abrir caja' },
     { key: 'closeCash', label: 'Puede cerrar caja' },
     { key: 'manageProducts', label: 'Puede modificar productos' },
     { key: 'manageUsers', label: 'Puede gestionar usuarios' },
@@ -4742,6 +4820,9 @@ function wireEvents() {
       }
       applyWarehouseImpactFromSaleItems(sale.items, { reverse: true, saleId: `#${orderNumberLabel(sale.orderNumber)}` });
       state.sales = state.sales.filter((x) => x.id !== sale.id);
+      state.deletedRecordIds = state.deletedRecordIds || { cashClosings: [], sales: [] };
+      if (!Array.isArray(state.deletedRecordIds.sales)) state.deletedRecordIds.sales = [];
+      if (!state.deletedRecordIds.sales.includes(sale.id)) state.deletedRecordIds.sales.push(sale.id);
       persist();
       refreshFinancialViews();
       renderWarehouse();
@@ -4921,7 +5002,11 @@ function wireEvents() {
   cashClosingsTable?.addEventListener('click', (e) => {
     const del = e.target.closest('button[data-closing-del]');
     if (del && hasPermission('deleteClosings')) {
-      state.cashClosings = state.cashClosings.filter((c) => c.id !== del.dataset.closingDel);
+      const removedId = del.dataset.closingDel;
+      state.cashClosings = state.cashClosings.filter((c) => c.id !== removedId);
+      state.deletedRecordIds = state.deletedRecordIds || { cashClosings: [], sales: [] };
+      if (!Array.isArray(state.deletedRecordIds.cashClosings)) state.deletedRecordIds.cashClosings = [];
+      if (!state.deletedRecordIds.cashClosings.includes(removedId)) state.deletedRecordIds.cashClosings.push(removedId);
       persist();
       renderCashClosings();
       return;
@@ -4975,6 +5060,9 @@ async function bootstrap() {
   if (!state.touchUiConfigByUser || typeof state.touchUiConfigByUser !== 'object') state.touchUiConfigByUser = {};
   if (!state.categoryImages || typeof state.categoryImages !== 'object') state.categoryImages = {};
   if (!state.orderCounters || typeof state.orderCounters !== 'object') state.orderCounters = {};
+  if (!state.deletedRecordIds || typeof state.deletedRecordIds !== 'object') state.deletedRecordIds = { cashClosings: [], sales: [] };
+  if (!Array.isArray(state.deletedRecordIds.cashClosings)) state.deletedRecordIds.cashClosings = [];
+  if (!Array.isArray(state.deletedRecordIds.sales)) state.deletedRecordIds.sales = [];
   normalizeWarehouseData();
   normalizeDebtPaymentsData();
   normalizeCashState();
