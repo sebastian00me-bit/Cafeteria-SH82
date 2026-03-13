@@ -359,6 +359,7 @@ let appConfig = {
 let cloudPullInFlight = null;
 let cloudSyncTimer = null;
 let lastCloudPullAt = 0;
+let cloudHydrated = false;
 const CLOUD_PULL_MIN_INTERVAL_MS = 500;
 const CLOUD_POLL_INTERVAL_MS = 700;
 
@@ -413,7 +414,7 @@ const defaultBillingConfig = {
 function normalizeBillingSettings() {
   if (!state.settings || typeof state.settings !== 'object') state.settings = {};
   const merged = { ...defaultBillingConfig, ...(state.settings.billing || {}) };
-  merged.enabled = Boolean(merged.enabled);
+  merged.enabled = false;
   merged.paperWidthMm = Math.max(58, Math.min(120, Number(merged.paperWidthMm || 80)));
   merged.marginMm = Math.max(0, Math.min(20, Number(merged.marginMm || 4)));
   merged.title = String(merged.title || defaultBillingConfig.title);
@@ -431,7 +432,7 @@ function normalizeBillingSettings() {
   merged.message2SizePt = Math.max(7, Math.min(18, Number(merged.message2SizePt || 9)));
   merged.message2Bold = Boolean(merged.message2Bold);
   merged.message2Font = ['helvetica', 'times', 'courier'].includes(String(merged.message2Font || 'helvetica')) ? String(merged.message2Font || 'helvetica') : 'helvetica';
-  merged.autoPrintEnabled = Boolean(merged.autoPrintEnabled);
+  merged.autoPrintEnabled = false;
   state.settings.billing = merged;
   return merged;
 }
@@ -637,7 +638,8 @@ function persist(options = {}) {
   if (state.currentUser && !validateSessionPolicy({ silent: false })) return;
   saveLocalState();
   if (options.sync === false) return;
-  scheduleCloudSync(document.hidden ? 3500 : 1200);
+  if (!cloudHydrated) return;
+  scheduleCloudSync(document.hidden ? 1200 : 600);
 }
 
 function defaultPermissions() {
@@ -3401,6 +3403,7 @@ async function pullFromCloud(options = {}) {
     saveLocalState();
     renderOrdersVisibility();
     renderProducts(); renderOrders(false); renderSalesHistory(); renderDeletedSales(); renderDebtors(); renderDebtPayments(); renderWarehouse(); renderSummary(); renderCashStatus(); renderHomeActions();
+    cloudHydrated = true;
     const currentRoute = normalizeRoute(window.location.hash || '#home');
     const inSettingsBranch = currentRoute === 'settings' || currentRoute.startsWith('settings/');
     const inPosBranch = currentRoute.startsWith('pos/') || currentRoute === 'cash/closings';
@@ -3508,9 +3511,11 @@ async function handleLogin() {
   const username = loginUserInput?.value?.trim() || '';
   const password = loginPassInput?.value?.trim() || '';
   if (!username || !password) return setMsg(loginMessage, 'Ingresa usuario y contraseña para continuar.', false);
+  try { await pullFromCloud({ force: true }); } catch {}
+  ensureUsers();
   let user = state.users.find((u) => u.username === username && u.password === password);
   if (!user) {
-    await pullFromCloud({ force: true });
+    try { await pullFromCloud({ force: true }); } catch {}
     ensureUsers();
     user = state.users.find((u) => u.username === username && u.password === password);
   }
@@ -3526,6 +3531,7 @@ async function handleLogin() {
   setMsg(loginMessage, '');
   markUserActivity('login');
   persist();
+  cloudHydrated = true;
   maybeForceLogoutFromClosure();
   if (!state.currentUser) return;
   renderOrdersVisibility();
@@ -3810,11 +3816,6 @@ async function registerSale() {
       console.error('[sale] async sync failed', err);
       scheduleCloudSync(250);
     });
-  const billingCfg = billingSettings();
-  if (billingCfg.enabled) {
-    Promise.resolve(openSaleInvoiceWindow(sale, { syncBeforeOpen: false, autoPrint: Boolean(billingCfg.autoPrintEnabled) }))
-      .catch((err) => { console.error('[invoice] non-blocking open failed', err); });
-  }
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
@@ -5108,6 +5109,7 @@ async function bootstrap() {
   } else {
     Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
   }
+  cloudHydrated = true;
   maybeForceLogoutFromClosure();
   if (state.currentUser && validSession && validateSessionPolicy({ silent: true })) {
     navStack = ['home'];
