@@ -574,6 +574,12 @@ function cloudChildUrl(childPath = '') {
   return safeChild ? root.replace(/\.json(\?.*)?$/, `/${safeChild}.json$1`) : root;
 }
 
+async function pullFromCloudWithTimeout(timeoutMs = 1800) {
+  const pullPromise = pullFromCloud({ force: true });
+  const timeoutPromise = new Promise((resolve) => setTimeout(resolve, Math.max(300, Number(timeoutMs || 1800))));
+  await Promise.race([pullPromise, timeoutPromise]);
+}
+
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -760,10 +766,18 @@ function validateSessionPolicy({ silent = false } = {}) {
     logout('Usuario inhabilitado por administrador.');
     return false;
   }
+  const loginAt = Number(state.currentUser.loginAt || 0);
+  const forcedAt = Number(state.forceLogoutAt || 0);
+  if (forcedAt && loginAt && loginAt <= forcedAt) {
+    user.lastLogoutAt = Date.now();
+    saveLocalState();
+    logout('La caja fue cerrada globalmente. Debes iniciar sesión nuevamente.');
+    return false;
+  }
   const last = Math.max(
     Number(user.lastActivityAt || 0),
     Number(state.currentUser.lastActivityAt || 0),
-    Number(state.currentUser.loginAt || 0)
+    loginAt
   );
   if (last && (Date.now() - last) >= SESSION_INACTIVITY_LIMIT_MS) {
     user.lastLogoutAt = Date.now();
@@ -3511,14 +3525,9 @@ async function handleLogin() {
   const username = loginUserInput?.value?.trim() || '';
   const password = loginPassInput?.value?.trim() || '';
   if (!username || !password) return setMsg(loginMessage, 'Ingresa usuario y contraseña para continuar.', false);
-  try { await pullFromCloud({ force: true }); } catch {}
+  try { await pullFromCloudWithTimeout(1500); } catch {}
   ensureUsers();
-  let user = state.users.find((u) => u.username === username && u.password === password);
-  if (!user) {
-    try { await pullFromCloud({ force: true }); } catch {}
-    ensureUsers();
-    user = state.users.find((u) => u.username === username && u.password === password);
-  }
+  const user = state.users.find((u) => u.username === username && u.password === password);
   if (!user) return setMsg(loginMessage, 'Usuario o contraseña incorrectos.', false);
   if (user.enabled === false) return setMsg(loginMessage, 'Usuario inhabilitado por administrador.', false);
   const now = Date.now();
@@ -3695,6 +3704,7 @@ async function closeCashSession() {
     state.activeCashBoxId = '';
     state.systemStatus = 'CAJA_CERRADA';
     state.cashSession = null;
+    state.forceLogoutAt = Date.now();
     persist();
 
     renderHomeActions();
@@ -3801,21 +3811,26 @@ async function registerSale() {
   state.sales.unshift(sale);
   state.currentCart = [];
   persist({ sync: false });
-  Promise.resolve()
-    .then(() => syncToCloud())
-    .then(() => pullFromCloud({ force: true }))
-    .then(() => {
-      if (!state.sales.some((x) => x.id === sale.id)) {
-        state.sales.unshift(sale);
-        persist({ sync: false });
-        return syncToCloud().then(() => pullFromCloud({ force: true }));
-      }
-      return null;
-    })
-    .catch((err) => {
-      console.error('[sale] async sync failed', err);
-      scheduleCloudSync(250);
-    });
+  let confirmed = false;
+  try {
+    await syncToCloud();
+    await pullFromCloud({ force: true });
+    confirmed = state.sales.some((x) => x.id === sale.id);
+    if (!confirmed) {
+      state.sales.unshift(sale);
+      persist({ sync: false });
+      await syncToCloud({ attempt: 1 });
+      await pullFromCloud({ force: true });
+      confirmed = state.sales.some((x) => x.id === sale.id);
+    }
+  } catch (err) {
+    console.error('[sale] confirm sync failed', err);
+  }
+  if (!confirmed) {
+    state.sales = state.sales.filter((x) => x.id !== sale.id);
+    persist({ sync: false });
+    return setMsg(saleMessage, 'No se pudo confirmar la venta en la nube. Intenta nuevamente.', false);
+  }
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
