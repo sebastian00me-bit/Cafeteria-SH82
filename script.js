@@ -650,39 +650,48 @@ async function optimizeImageForUpload(file, { maxSize = 300 } = {}) {
 }
 
 async function uploadImageToFirebaseStorage({ kind, key, file, previousUrl = '', onProgress = null }) {
-  const { storage } = await ensureFirebaseStorageSdk();
+  const bucket = inferStorageBucket();
+  if (!bucket) throw new Error('No se pudo determinar el bucket de Firebase Storage.');
   const safeKey = normalizeImagePathSegment(key);
   const ext = file.type.includes('png') ? 'webp' : (file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : 'webp');
   const folder = kind === 'category' ? 'categorias' : 'productos';
   const path = `${folder}/${safeKey}-${Date.now()}.${ext}`;
   const optimized = await optimizeImageForUpload(file, { maxSize: kind === 'category' ? 400 : 300 });
-  const ref = storage.ref(path);
-  const task = ref.put(optimized.blob, { contentType: optimized.contentType, cacheControl: 'public,max-age=31536000' });
-  let stalledTimer = 0;
-  const refreshStall = () => {
-    if (stalledTimer) clearTimeout(stalledTimer);
-    stalledTimer = window.setTimeout(() => {
-      try { task.cancel(); } catch {}
-    }, 30000);
-  };
-  refreshStall();
-  await withTimeout(new Promise((resolve, reject) => {
-    task.on('state_changed', (snap) => {
-      refreshStall();
+  const authParam = state.settings?.firebaseDbToken ? `&auth=${encodeURIComponent(state.settings.firebaseDbToken)}` : '';
+  const uploadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o?name=${encodeURIComponent(path)}${authParam}`;
+  const uploadResult = await withTimeout(new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', uploadUrl, true);
+    xhr.setRequestHeader('Content-Type', optimized.contentType || 'application/octet-stream');
+    xhr.upload.onprogress = (event) => {
       if (!onProgress) return;
-      const total = Number(snap.totalBytes || 0);
-      const loaded = Number(snap.bytesTransferred || 0);
-      const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
+      if (!event.lengthComputable) return;
+      const pct = Math.round((event.loaded / event.total) * 100);
       onProgress(pct);
-    }, (err) => reject(err), () => resolve());
-  }), 45000, 'La subida tardó demasiado. Verifica tu conexión o reglas de Firebase Storage.').finally(() => {
-    if (stalledTimer) clearTimeout(stalledTimer);
-  });
-  const downloadUrl = await withTimeout(ref.getDownloadURL(), 10000, 'No se pudo obtener URL pública de la imagen.');
+    };
+    xhr.onerror = () => reject(new Error('Error de red al subir imagen.'));
+    xhr.ontimeout = () => reject(new Error('Tiempo de espera agotado al subir imagen.'));
+    xhr.timeout = 45000;
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        return reject(new Error(`Error Firebase Storage (${xhr.status}). Verifica reglas de Storage.`));
+      }
+      try { resolve(JSON.parse(xhr.responseText || '{}')); }
+      catch { reject(new Error('Respuesta inválida de Firebase Storage.')); }
+    };
+    xhr.send(optimized.blob);
+  }), 50000, 'La subida tardó demasiado. Verifica tu conexión o reglas de Firebase Storage.');
+  const token = String(uploadResult?.downloadTokens || '').split(',')[0].trim();
+  const encodedPath = encodeURIComponent(path);
+  const downloadUrl = token
+    ? `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodedPath}?alt=media&token=${encodeURIComponent(token)}`
+    : `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodedPath}?alt=media`;
   try {
     if (previousUrl && previousUrl.includes('/o/')) {
       const oldPath = decodeURIComponent(previousUrl.split('/o/')[1]?.split('?')[0] || '');
-      if (oldPath) await storage.ref(oldPath).delete();
+      if (oldPath) {
+        await fetch(`https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodeURIComponent(oldPath)}${authParam}`, { method: 'DELETE' });
+      }
     }
   } catch {}
   return downloadUrl;
