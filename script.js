@@ -605,8 +605,8 @@ async function ensureFirebaseStorageSdk() {
     document.head.appendChild(script);
   });
   firebaseStorageReadyPromise = (async () => {
-    await loadScript('https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js');
-    await loadScript('https://www.gstatic.com/firebasejs/10.12.4/firebase-storage-compat.js');
+    await withTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js'), 12000, 'No se pudo cargar Firebase App SDK.');
+    await withTimeout(loadScript('https://www.gstatic.com/firebasejs/10.12.4/firebase-storage-compat.js'), 12000, 'No se pudo cargar Firebase Storage SDK.');
     if (!window.firebase) throw new Error('Firebase SDK no disponible.');
     const bucket = inferStorageBucket();
     if (!bucket) throw new Error('No se pudo inferir firebaseStorageBucket.');
@@ -620,6 +620,15 @@ async function ensureFirebaseStorageSdk() {
 
 function normalizeImagePathSegment(value) {
   return String(value || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'item';
+}
+
+
+function withTimeout(promise, timeoutMs, message = 'Tiempo de espera agotado.') {
+  let timer = 0;
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error(message)), Math.max(1000, Number(timeoutMs || 25000)));
+  });
+  return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
 }
 
 async function optimizeImageForUpload(file, { maxSize = 300 } = {}) {
@@ -649,16 +658,27 @@ async function uploadImageToFirebaseStorage({ kind, key, file, previousUrl = '',
   const optimized = await optimizeImageForUpload(file, { maxSize: kind === 'category' ? 400 : 300 });
   const ref = storage.ref(path);
   const task = ref.put(optimized.blob, { contentType: optimized.contentType, cacheControl: 'public,max-age=31536000' });
-  await new Promise((resolve, reject) => {
+  let stalledTimer = 0;
+  const refreshStall = () => {
+    if (stalledTimer) clearTimeout(stalledTimer);
+    stalledTimer = window.setTimeout(() => {
+      try { task.cancel(); } catch {}
+    }, 30000);
+  };
+  refreshStall();
+  await withTimeout(new Promise((resolve, reject) => {
     task.on('state_changed', (snap) => {
+      refreshStall();
       if (!onProgress) return;
       const total = Number(snap.totalBytes || 0);
       const loaded = Number(snap.bytesTransferred || 0);
       const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
       onProgress(pct);
-    }, reject, resolve);
+    }, (err) => reject(err), () => resolve());
+  }), 45000, 'La subida tardó demasiado. Verifica tu conexión o reglas de Firebase Storage.').finally(() => {
+    if (stalledTimer) clearTimeout(stalledTimer);
   });
-  const downloadUrl = await ref.getDownloadURL();
+  const downloadUrl = await withTimeout(ref.getDownloadURL(), 10000, 'No se pudo obtener URL pública de la imagen.');
   try {
     if (previousUrl && previousUrl.includes('/o/')) {
       const oldPath = decodeURIComponent(previousUrl.split('/o/')[1]?.split('?')[0] || '');
@@ -1447,8 +1467,11 @@ function openImageUploadForProduct(productId) {
           onProgress: (pct) => setImageUploadStatus('product', productId, { uploading: true, progress: Math.max(2, Math.min(100, pct)), error: '' })
         });
         delete p.imageDataUrl;
-      } catch {
+      } catch (err) {
         p.imageUrl = previous;
+        setImageUploadStatus('product', productId, { uploading: false, progress: 0, error: String(err?.message || 'No se pudo subir la imagen.') });
+        setTimeout(() => setImageUploadStatus('product', productId, null), 4000);
+        return;
       }
       const ok = persistImageChange(() => { p.imageUrl = previous; });
       if (!ok) {
@@ -1479,8 +1502,11 @@ function openImageUploadForCategory(categoryName) {
           key: categoryName,
           onProgress: (pct) => setImageUploadStatus('category', categoryName, { uploading: true, progress: Math.max(2, Math.min(100, pct)), error: '' })
         });
-      } catch {
+      } catch (err) {
         state.categoryImages[categoryName] = previous;
+        setImageUploadStatus('category', categoryName, { uploading: false, progress: 0, error: String(err?.message || 'No se pudo subir la imagen.') });
+        setTimeout(() => setImageUploadStatus('category', categoryName, null), 4000);
+        return;
       }
       const ok = persistImageChange(() => {
         if (previous) state.categoryImages[categoryName] = previous;
