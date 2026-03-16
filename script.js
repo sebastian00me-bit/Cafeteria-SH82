@@ -1193,7 +1193,7 @@ function renderTouchSaleUi() {
   state.touchUiState = state.touchUiState || { view: 'categories', category: '', page: 0 };
   const ui = state.touchUiState;
   if (!cats.includes(ui.category)) { ui.category = ''; ui.view = 'categories'; ui.page = 0; }
-  const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category);
+  const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || Number(p.stockCurrent || 0) > 0);
   const pages = Math.max(1, Math.ceil(list.length / cap));
   if (ui.page >= pages) ui.page = 0;
   const pageItems = list.slice(ui.page * cap, (ui.page + 1) * cap);
@@ -1207,7 +1207,10 @@ function renderTouchSaleUi() {
     const productSrc = resolveImageSource(item.imageUrl || item.imageDataUrl);
     const hasImg = Boolean(productSrc);
     const img = productSrc ? `<img class=\"touch-media\" src=\"${productSrc}\" alt=\"${item.name}\" loading=\"lazy\" />` : '';
-    return `<button class="touch-card ${hasImg ? 'with-image' : 'no-image'}" data-touch-prod="${item.id}" type="button">${img}<strong class="touch-card-title">${item.name}</strong><span class="touch-card-price">${money(item.price)}</span></button>`;
+    const stock = Number(item.stockCurrent || 0);
+    const lowStock = isStockEnabled() && stock > 0 && stock <= Number(appConfig.stockMinimo || 0);
+    const stockBadge = lowStock ? `<small class=\"stock-warning\">Stock: ${stock}</small>` : '';
+    return `<button class="touch-card ${hasImg ? 'with-image' : 'no-image'} ${lowStock ? 'stock-empty' : ''}" data-touch-prod="${item.id}" type="button">${img}<strong class="touch-card-title">${item.name}</strong><span class="touch-card-price">${money(item.price)}</span>${stockBadge}</button>`;
   };
   host.className = `touch-sales-layout cart-${cfg.cartPosition}`;
   host.innerHTML = `<div class="touch-main"><div class="touch-toolbar">${ui.view === 'products' ? '<button id="touchBackToCats" class="secondary" type="button">Volver a categorías</button>' : '<span></span>'}<div class="touch-pager"><button id="touchPrevPage" class="secondary" type="button">◀</button><span>Página ${ui.page + 1}/${pages}</span><button id="touchNextPage" class="secondary" type="button">▶</button></div></div><div class="touch-grid" style="--touch-cols:${getTouchUiConfig().grid.split('x')[0]};">${pageItems.map(renderCard).join('')}</div></div><aside class="touch-cart"><h3>Lista de compras</h3><div class="touch-cart-items">${state.currentCart.length ? state.currentCart.map((i) => `<div class="touch-cart-item"><div><strong>${i.name}</strong><small>${money(i.price)} c/u · Total ${money(Number(i.finalSubtotal ?? (i.price*i.qty)))}</small></div><div class="touch-qty"><button data-touch-dec="${i.id}" type="button">-</button><span>${i.qty}</span><button data-touch-inc="${i.id}" type="button">+</button><button data-touch-tools="${i.id}" type="button">🛠</button><button data-touch-rm="${i.id}" type="button">✕</button></div></div>`).join('') : '<p>Sin productos añadidos.</p>'}</div><div class="touch-summary"><p>Subtotal: ${money(saleTotals().gross)}</p><p>Descuento: ${money(saleTotals().discount)}</p><p><strong>Total: ${money(saleTotals().final)}</strong></p></div><button id="touchProceedPayBtn" class="primary" type="button">Proceder con el pago</button><div class="grid2"><button id="touchQueueBtn" class="secondary" type="button">Añadir a la cola</button><button id="touchQueuedBtn" class="secondary" type="button">Ver pedidos pendientes</button></div><div class="touch-finance"><small>Total de caja: ${cashTotalBox?.textContent || money(0)}</small><small>Cambio final más efectivo del día: ${summaryFinalCash?.textContent || money(0)}</small><small>Total de QR del día: ${summaryFinalQr?.textContent || money(0)}</small></div></aside>`;
@@ -1219,6 +1222,7 @@ function renderTouchSaleUi() {
   host.querySelectorAll('[data-touch-prod]').forEach((b) => b.addEventListener('click', () => {
     const p = state.products.find((x) => x.id === b.dataset.touchProd);
     if (!p) return;
+    if (isStockEnabled() && Number(p.stockCurrent || 0) <= 0) return alert('Producto sin stock disponible.');
     const e = state.currentCart.find((i) => i.id === p.id);
     if (e) e.qty += 1; else state.currentCart.push({ id: p.id, name: p.name, price: Number(p.price || 0), qty: 1, discountPct: 0, finalSubtotal: Number(p.price || 0) });
     const item = state.currentCart.find((i) => i.id === p.id);
@@ -1230,7 +1234,7 @@ function renderTouchSaleUi() {
     renderCart();
     renderTouchSaleUi();
   }));
-  host.querySelectorAll('[data-touch-inc]').forEach((b) => b.addEventListener('click', () => { const i = state.currentCart.find((x) => x.id === b.dataset.touchInc); if (!i) return; i.qty += 1; i.finalSubtotal = i.price*i.qty - (i.price*i.qty*(i.discountPct||0)/100); renderCart(); renderTouchSaleUi(); }));
+  host.querySelectorAll('[data-touch-inc]').forEach((b) => b.addEventListener('click', () => { const i = state.currentCart.find((x) => x.id === b.dataset.touchInc); if (!i) return; const p = state.products.find((x) => x.id === i.id); if (isStockEnabled() && Number(i.qty || 0) >= Number(p?.stockCurrent || 0)) return alert('Stock insuficiente para agregar producto.'); i.qty += 1; i.finalSubtotal = i.price*i.qty - (i.price*i.qty*(i.discountPct||0)/100); renderCart(); renderTouchSaleUi(); }));
   host.querySelectorAll('[data-touch-dec]').forEach((b) => b.addEventListener('click', () => { const i = state.currentCart.find((x) => x.id === b.dataset.touchDec); if (!i) return; i.qty = Math.max(1, i.qty-1); i.finalSubtotal = i.price*i.qty - (i.price*i.qty*(i.discountPct||0)/100); renderCart(); renderTouchSaleUi(); }));
   host.querySelectorAll('[data-touch-rm]').forEach((b) => b.addEventListener('click', () => { state.currentCart = state.currentCart.filter((x) => x.id !== b.dataset.touchRm); renderCart(); renderTouchSaleUi(); }));
   host.querySelectorAll('[data-touch-tools]').forEach((b) => b.addEventListener('click', () => openTouchItemTools(b.dataset.touchTools)));
@@ -1766,8 +1770,8 @@ async function downloadClosingPdf(closingId) {
       ['Hora apertura', new Date(closing.openedAt || closing.fecha_apertura || closing.closedAt).toLocaleTimeString()],
       ['Fecha cierre', new Date(closing.closedAt).toLocaleDateString()],
       ['Hora cierre', new Date(closing.closedAt).toLocaleTimeString()],
-      ['Usuario apertura', closing.usuario_apertura || '-'],
-      ['Usuario cierre', closing.usuario_cierre || '-'],
+      ['Usuario apertura', closing.usuario_apertura || state.cashBoxes.find((b) => b.id === closing.cashBoxId)?.usuario_apertura || '-'],
+      ['Usuario cierre', closing.usuario_cierre || state.cashBoxes.find((b) => b.id === closing.cashBoxId)?.usuario_cierre || '-'],
       ['Tiempo abierto', formatDurationMs(new Date(closing.closedAt) - new Date(closing.openedAt || closing.fecha_apertura || closing.closedAt))]
     ];
     doc.autoTable({ startY: y0 + 18, head: [['Información general', 'Valor']], body: general, theme: 'grid' });
@@ -1778,14 +1782,11 @@ async function downloadClosingPdf(closingId) {
       ['Total descuentos', money(Number(closing.discountTotal || 0))],
       ['Total ingresos netos', money(agg.net)],
       ['Total efectivo', money(agg.cash)],
-      ['Total transferencias', money(agg.transfer)],
       ['Total QR', money(agg.qr)],
-      ['Otros métodos', money(agg.others)],
-      ['Total gastos', money(agg.outTotal)],
+      ['Total salidas', money(agg.outTotal)],
+      ['Total entradas', money(agg.inTotal)],
       ['Total esperado', money(agg.expected)],
-      ['Total contado', money(agg.counted)],
-      ['Diferencia', money(agg.diff)],
-      ['Estado final', agg.diff === 0 ? 'CUADRADO' : (agg.diff > 0 ? 'SOBRANTE' : 'FALTANTE')]
+      ['Total contado', money(agg.counted)]
     ];
     doc.autoTable({ startY: fy, head: [['Resumen financiero', 'Valor']], body: fin, theme: 'grid' });
     const oy = doc.lastAutoTable.finalY + 4;
@@ -1808,6 +1809,30 @@ async function downloadClosingPdf(closingId) {
       ['Otros', `${money(agg.others)} (${((agg.others/totalNet)*100).toFixed(1)}%)`]
     ];
     doc.autoTable({ startY: py, head: [['Método', 'Monto']], body: mpay, theme: 'grid' });
+    const movementRows = (closing.outflowsSnapshot || []).map((m) => [
+      new Date(m.createdAt || closing.closedAt).toLocaleString(),
+      m.direction || '-',
+      m.method || '-',
+      m.description || '-',
+      money(m.amount || 0),
+      m.user || '-'
+    ]);
+    const entriesRows = movementRows.filter((r) => String(r[1]).toLowerCase() === 'entrada');
+    const exitsRows = movementRows.filter((r) => String(r[1]).toLowerCase() === 'salida');
+
+    const userSalesMap = new Map();
+    (closing.salesSnapshot || []).forEach((sale) => {
+      const user = sale.user || '-';
+      if (!userSalesMap.has(user)) userSalesMap.set(user, { count: 0, total: 0 });
+      const row = userSalesMap.get(user);
+      row.count += 1;
+      row.total += Number(sale.total || 0);
+    });
+    const userSalesRows = [...userSalesMap.entries()].map(([user, row]) => [user, String(row.count), money(row.total)]);
+
+    doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['DETALLE DE ENTRADAS', '', '', '', '', '']], body: entriesRows.length ? entriesRows : [['Sin entradas.', '', '', '', '', '']], theme: 'grid' });
+    doc.autoTable({ startY: doc.lastAutoTable.finalY + 3, head: [['DETALLE DE SALIDAS', '', '', '', '', '']], body: exitsRows.length ? exitsRows : [['Sin salidas.', '', '', '', '', '']], theme: 'grid' });
+    doc.autoTable({ startY: doc.lastAutoTable.finalY + 3, head: [['VENTAS POR USUARIO', '', '']], body: userSalesRows.length ? userSalesRows : [['Sin ventas por usuario.', '', '']], theme: 'grid' });
     const historyRows = closingSalesHistoryRows(closing).map((sale) => [
       new Date(sale.createdAt || sale.deletedAt).toLocaleString(),
       `#${orderNumberLabel(sale.orderNumber)}`,
@@ -4546,7 +4571,19 @@ function showSettingsMenu() {
   settingsMenuCard?.classList.remove('hidden');
 }
 
-function saveMainSettings() {
+async function flushConfigChanges(successMsg) {
+  persist();
+  applySettings();
+  renderOrdersVisibility();
+  try {
+    await syncToCloud();
+  } catch (err) {
+    console.warn('[config] sync warning', err);
+  }
+  if (successMsg) setMsg(homeMessage, successMsg);
+}
+
+async function saveMainSettings() {
   if (!hasPermission('accessSettings')) return setMsg(homeMessage, 'No tienes permiso para configurar pantalla principal.', false);
   state.settings.title1 = title1Input?.value?.trim() || 'Mi Cafetería';
   state.settings.title2 = title2Input?.value?.trim() || 'Pantalla principal';
@@ -4563,27 +4600,26 @@ function saveMainSettings() {
   state.settings.accentColor = accentColorInput?.value || '#1f7a5c';
   state.settings.bgColor = bgColorInput?.value || '#f7f7fb';
   state.settings.cardColor = cardColorInput?.value || '#ffffff';
+  syncAppConfig();
+  const file = logoInput?.files?.[0];
+  if (!file) return flushConfigChanges('Configuración guardada.');
+  const reader = new FileReader();
+  reader.onload = async () => {
+    state.settings.logoDataUrl = String(reader.result || '');
+    await flushConfigChanges('Configuración guardada.');
+    if (logoInput) logoInput.value = '';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function saveSalesConfigSettings() {
+  if (!hasPermission('accessSettings')) return setMsg(homeMessage, 'No tienes permiso para configurar ventas.', false);
   state.settings.ordersEnabled = Boolean(tempConfig.activarPedidos);
   state.stockConfig.enabled = Boolean(tempConfig.stockActivo);
   state.stockConfig.min = Math.max(0, Number(stockMinInput?.value || 0));
   syncAppConfig();
-  const file = logoInput?.files?.[0];
-  if (!file) {
-    persist();
-    applySettings();
-    renderOrdersVisibility();
-    return setMsg(homeMessage, 'Configuración guardada.');
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    state.settings.logoDataUrl = String(reader.result || '');
-    persist();
-    applySettings();
-    renderOrdersVisibility();
-    setMsg(homeMessage, 'Configuración guardada.');
-    if (logoInput) logoInput.value = '';
-  };
-  reader.readAsDataURL(file);
+  await flushConfigChanges('Configuración de ventas guardada.');
+  if (salesConfigStatus) salesConfigStatus.textContent = `Stock: ${appConfig.stockActivo ? 'ACTIVO' : 'INACTIVO'} · Pedidos: ${appConfig.activarPedidos ? 'ACTIVO' : 'INACTIVO'}`;
 }
 
 
@@ -4824,7 +4860,7 @@ function wireEvents() {
   disableStockBtn?.addEventListener('click', () => { tempConfig.stockActivo = false; if (salesConfigStatus) salesConfigStatus.textContent = 'Cambio pendiente: Stock DESACTIVADO'; });
   enableOrdersBtn?.addEventListener('click', () => { tempConfig.activarPedidos = true; if (salesConfigStatus) salesConfigStatus.textContent = 'Cambio pendiente: Pedidos ACTIVADOS'; });
   disableOrdersBtn?.addEventListener('click', () => { tempConfig.activarPedidos = false; if (salesConfigStatus) salesConfigStatus.textContent = 'Cambio pendiente: Pedidos DESACTIVADOS'; });
-  applySalesConfigBtn?.addEventListener('click', () => saveMainSettings());
+  applySalesConfigBtn?.addEventListener('click', () => saveSalesConfigSettings());
   billingToggleActionBtn?.addEventListener('click', () => {
     if (billingEnabledInput) billingEnabledInput.checked = !billingEnabledInput.checked;
     const active = Boolean(billingEnabledInput?.checked);
