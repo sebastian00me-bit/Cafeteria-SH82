@@ -3705,7 +3705,7 @@ async function syncToCloud(options = {}) {
     const url = buildCloudRootUrl({ includeToken });
     if (!url) continue;
     try {
-      const remoteResp = await fetch(url, { headers: { 'X-Firebase-ETag': 'true' } });
+      const remoteResp = await fetch(url);
       if (!remoteResp.ok) {
         const err = makeSyncError('RTDB_HTTP_GET', 'get', remoteResp.status, `[sync][rtdb] GET fallo (${remoteResp.status}) usando ${modeLabel}.`, { modeLabel });
         if (includeToken && (remoteResp.status === 401 || remoteResp.status === 403)) {
@@ -3715,8 +3715,8 @@ async function syncToCloud(options = {}) {
         }
         throw err;
       }
-      const remoteData = await remoteResp.json();
-      const remoteEtag = remoteResp.headers.get('ETag');
+      let remoteData = null;
+      try { remoteData = await remoteResp.json(); } catch { remoteData = null; }
       const remoteUpdatedAt = Number(remoteData?.updatedAt || 0);
       const payload = snapshotPayload();
       const mergedDeleted = mergeDeletedRecordIds(remoteData?.deletedRecordIds, payload.deletedRecordIds);
@@ -3733,15 +3733,8 @@ async function syncToCloud(options = {}) {
         payload.cashSession = remoteData.cashSession || payload.cashSession;
       }
       if (remoteUpdatedAt && Number(payload.updatedAt || 0) <= remoteUpdatedAt) payload.updatedAt = remoteUpdatedAt + 1;
-      const putHeaders = { 'Content-Type': 'application/json' };
-      if (remoteEtag) putHeaders['if-match'] = remoteEtag;
-      const putResp = await fetch(url, { method: 'PUT', headers: putHeaders, body: JSON.stringify(payload) });
-      if (putResp.status === 412) {
-        console.warn('[sync][etag] Conflicto ETag 412 detectado.', { attempt: Number(options.attempt || 0), modeLabel });
-        if (Number(options.attempt || 0) < 2) return syncToCloud({ ...options, attempt: Number(options.attempt || 0) + 1 });
-        if (syncStatus) syncStatus.textContent = 'Conflicto detectado. Reintenta sincronizar.';
-        throw makeSyncError('SYNC_ETAG_CONFLICT', 'put', 412, '[sync][etag] Conflicto ETag persistente tras reintentos.', { modeLabel });
-      }
+
+      const putResp = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (!putResp.ok) {
         const err = makeSyncError('RTDB_HTTP_PUT', 'put', putResp.status, `[sync][rtdb] PUT fallo (${putResp.status}) usando ${modeLabel}.`, { modeLabel });
         if (includeToken && (putResp.status === 401 || putResp.status === 403)) {
@@ -4215,8 +4208,7 @@ async function registerSale() {
     confirmed = true;
     Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
   } catch (err) {
-    if (err?.code === 'SYNC_ETAG_CONFLICT') console.error('[sale][sync][etag] Conflicto ETag al confirmar venta', err);
-    else if (String(err?.code || '').startsWith('RTDB_HTTP_')) console.error('[sale][sync][rtdb] Error HTTP en Realtime Database al confirmar venta', err);
+    if (String(err?.code || '').startsWith('RTDB_HTTP_')) console.error('[sale][sync][rtdb] Error HTTP en Realtime Database al confirmar venta', err);
     else console.error('[sale][sync] confirm sync failed', err);
   }
   if (!confirmed) {
