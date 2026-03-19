@@ -360,6 +360,9 @@ let cloudPullInFlight = null;
 let cloudSyncTimer = null;
 let lastCloudPullAt = 0;
 let cloudHydrated = false;
+let firebaseRealtimeListener = null;
+let firebaseRealtimeListenerUrl = '';
+let realtimeReconnectTimer = null;
 const CLOUD_PULL_MIN_INTERVAL_MS = 500;
 const CLOUD_POLL_INTERVAL_MS = 700;
 
@@ -717,6 +720,122 @@ async function uploadImageToFirebaseStorage({ kind, key, file, previousUrl = '',
   } catch (err) {
     console.error('[storage] Error durante subida/URL en Firebase Storage', { kind, key, message: err?.message });
     throw err;
+  }
+}
+
+
+function cloudBaseEndpoint({ includeToken = true } = {}) {
+  const root = buildCloudRootUrl({ includeToken });
+  return root ? root.replace(/\.json(\?.*)?$/, '') : '';
+}
+
+function cloudPathUrl(path, { includeToken = true } = {}) {
+  const base = cloudBaseEndpoint({ includeToken });
+  if (!base) return '';
+  const token = includeToken ? normalizedFirebaseToken() : '';
+  const qs = token ? `?auth=${encodeURIComponent(token)}` : '';
+  return `${base}/${String(path || '').replace(/^\/+/, '')}.json${qs}`;
+}
+
+async function commitSaleToFirebaseTransaction(sale) {
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  let lastError = null;
+  for (const includeToken of authModes) {
+    const modeLabel = includeToken ? 'token' : 'sin-token';
+    try {
+      const saleResp = await fetch(cloudPathUrl(`sales/${encodeURIComponent(sale.id)}`, { includeToken }), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sale)
+      });
+      if (!saleResp.ok) {
+        if (includeToken && (saleResp.status === 401 || saleResp.status === 403)) {
+          console.warn('[sale][tx][token] Venta rechazada con token. Reintentando sin token.', { status: saleResp.status });
+          continue;
+        }
+        throw Object.assign(new Error(`[sale][tx][rtdb] PUT sale fallo (${saleResp.status})`), { code: 'RTDB_HTTP_SALE', status: saleResp.status, stage: 'sale_put' });
+      }
+
+      const productsResp = await fetch(cloudPathUrl('products', { includeToken }), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state.products || [])
+      });
+      if (!productsResp.ok) throw Object.assign(new Error(`[sale][tx][rtdb] PUT products fallo (${productsResp.status})`), { code: 'RTDB_HTTP_PRODUCTS', status: productsResp.status, stage: 'products_put' });
+
+      const updatedAt = Date.now();
+      const updatedResp = await fetch(cloudPathUrl('updatedAt', { includeToken }), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedAt)
+      });
+      if (!updatedResp.ok) throw Object.assign(new Error(`[sale][tx][rtdb] PUT updatedAt fallo (${updatedResp.status})`), { code: 'RTDB_HTTP_UPDATEDAT', status: updatedResp.status, stage: 'updatedat_put' });
+
+      state.lastSyncAt = updatedAt;
+      saveLocalState();
+      console.info('[sale][tx] Venta confirmada en RTDB', { saleId: sale.id, modeLabel });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+      console.error('[sale][tx] Error confirmando venta en RTDB', { modeLabel, code: err?.code, status: err?.status, stage: err?.stage, message: err?.message });
+      if (!(includeToken && [401, 403].includes(Number(err?.status || 0)))) break;
+    }
+  }
+  throw lastError || new Error('sale transaction failed');
+}
+
+function applyCloudData(data) {
+  if (!data || !data.updatedAt) return;
+  state.lastSyncAt = Number(data.updatedAt || Date.now());
+  state.forceLogoutAt = Number(data.forceLogoutAt || 0);
+  ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters','deletedRecordIds'].forEach((k) => {
+    if (data[k] !== undefined) state[k] = data[k];
+  });
+  if (state.currentUser && !validateSessionPolicy({ silent: true })) return;
+  normalizeCloudSettings();
+  normalizeWarehouseData();
+  normalizeDebtPaymentsData();
+  normalizePeopleData();
+  normalizeCashState();
+  const removedClosings = new Set((state.deletedRecordIds?.cashClosings || []).map((x) => String(x)));
+  const removedSales = new Set((state.deletedRecordIds?.sales || []).map((x) => String(x)));
+  if (removedClosings.size) state.cashClosings = (state.cashClosings || []).filter((x) => !removedClosings.has(String(x?.id || '')));
+  if (removedSales.size) state.sales = (state.sales || []).filter((x) => !removedSales.has(String(x?.id || '')));
+  syncAppConfig();
+  saveLocalState();
+  renderOrdersVisibility();
+  renderProducts(); renderOrders(false); renderSalesHistory(); renderDeletedSales(); renderDebtors(); renderDebtPayments(); renderWarehouse(); renderSummary(); renderCashStatus(); renderHomeActions();
+  cloudHydrated = true;
+}
+
+function startFirebaseRealtimeListener() {
+  if (typeof EventSource === 'undefined') return;
+  const url = buildCloudRootUrl({ includeToken: false });
+  if (!url || (firebaseRealtimeListener && firebaseRealtimeListenerUrl === url)) return;
+  if (firebaseRealtimeListener) {
+    try { firebaseRealtimeListener.close(); } catch {}
+    firebaseRealtimeListener = null;
+  }
+  firebaseRealtimeListenerUrl = url;
+  try {
+    firebaseRealtimeListener = new EventSource(url);
+    const handleEvent = () => {
+      Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
+    };
+    firebaseRealtimeListener.addEventListener('put', handleEvent);
+    firebaseRealtimeListener.addEventListener('patch', handleEvent);
+    firebaseRealtimeListener.onerror = () => {
+      console.warn('[sync][realtime] Listener desconectado. Reintentando...');
+      try { firebaseRealtimeListener?.close(); } catch {}
+      firebaseRealtimeListener = null;
+      if (realtimeReconnectTimer) clearTimeout(realtimeReconnectTimer);
+      realtimeReconnectTimer = setTimeout(startFirebaseRealtimeListener, 2500);
+    };
+    console.info('[sync][realtime] Listener RTDB activo', { url });
+  } catch (err) {
+    console.error('[sync][realtime] No se pudo iniciar listener RTDB', err);
   }
 }
 
@@ -3786,27 +3905,8 @@ async function pullFromCloud(options = {}) {
     if (!options.force && data.updatedAt <= state.lastSyncAt) {
       return;
     }
-    state.lastSyncAt = Number(data.updatedAt || Date.now());
-    state.forceLogoutAt = Number(data.forceLogoutAt || 0);
-    ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters','deletedRecordIds'].forEach((k) => {
-      if (data[k] !== undefined) state[k] = data[k];
-    });
-    if (state.currentUser && !validateSessionPolicy({ silent: true })) return;
-    normalizeCloudSettings();
-    normalizeWarehouseData();
-    normalizeDebtPaymentsData();
-    normalizePeopleData();
-    normalizeCashState();
-    const removedClosings = new Set((state.deletedRecordIds?.cashClosings || []).map((x) => String(x)));
-    const removedSales = new Set((state.deletedRecordIds?.sales || []).map((x) => String(x)));
-    if (removedClosings.size) state.cashClosings = (state.cashClosings || []).filter((x) => !removedClosings.has(String(x?.id || '')));
-    if (removedSales.size) state.sales = (state.sales || []).filter((x) => !removedSales.has(String(x?.id || '')));
-  syncAppConfig();
+    applyCloudData(data);
     console.info('[cloud] estado sincronizado', { activeCashBoxId: state.activeCashBoxId, systemStatus: state.systemStatus });
-    saveLocalState();
-    renderOrdersVisibility();
-    renderProducts(); renderOrders(false); renderSalesHistory(); renderDeletedSales(); renderDebtors(); renderDebtPayments(); renderWarehouse(); renderSummary(); renderCashStatus(); renderHomeActions();
-    cloudHydrated = true;
     const currentRoute = normalizeRoute(window.location.hash || '#home');
     const inSettingsBranch = currentRoute === 'settings' || currentRoute.startsWith('settings/');
     const inPosBranch = currentRoute.startsWith('pos/') || currentRoute === 'cash/closings';
@@ -3932,6 +4032,7 @@ async function handleLogin() {
   markUserActivity('login');
   persist();
   cloudHydrated = true;
+  startFirebaseRealtimeListener();
   maybeForceLogoutFromClosure();
   if (!state.currentUser) return;
   renderOrdersVisibility();
@@ -4204,9 +4305,10 @@ async function registerSale() {
   persist({ sync: false });
   let confirmed = false;
   try {
-    await syncToCloud({ attempt: 0 });
+    await commitSaleToFirebaseTransaction(sale);
     confirmed = true;
     Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
+    Promise.resolve().then(() => syncToCloud({ attempt: 0 })).catch((err) => console.warn('[sale][sync] post-confirm full sync warning', err));
   } catch (err) {
     if (String(err?.code || '').startsWith('RTDB_HTTP_')) console.error('[sale][sync][rtdb] Error HTTP en Realtime Database al confirmar venta', err);
     else console.error('[sale][sync] confirm sync failed', err);
@@ -5538,7 +5640,7 @@ async function bootstrap() {
   window.addEventListener('hashchange', () => { if (applyingRoute) return; applyRoute(); });
   setInterval(() => { if (document.hidden) return; pullFromCloud(); }, CLOUD_POLL_INTERVAL_MS);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pullFromCloud({ force: true }); });
-  window.addEventListener('online', () => { pullFromCloud({ force: true }); });
+  window.addEventListener('online', () => { pullFromCloud({ force: true }); startFirebaseRealtimeListener(); });
   Promise.resolve().then(() => migrateCategoryImageRefsToDataUrls()).catch(() => {});
   if (state.currentUser && validSession) {
     try { await pullFromCloud({ force: true }); } catch {}
@@ -5546,6 +5648,7 @@ async function bootstrap() {
     Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
   }
   cloudHydrated = true;
+  startFirebaseRealtimeListener();
   maybeForceLogoutFromClosure();
   if (state.currentUser && validSession && validateSessionPolicy({ silent: true })) {
     navStack = ['home'];
