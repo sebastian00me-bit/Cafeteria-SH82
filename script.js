@@ -366,8 +366,8 @@ let cloudHydrated = false;
 let firebaseRealtimeListener = null;
 let firebaseRealtimeListenerUrl = '';
 let realtimeReconnectTimer = null;
-const CLOUD_PULL_MIN_INTERVAL_MS = 500;
-const CLOUD_POLL_INTERVAL_MS = 700;
+const CLOUD_PULL_MIN_INTERVAL_MS = 2500;
+const CLOUD_POLL_INTERVAL_MS = 8000;
 
 function syncAppConfig() {
   appConfig = {
@@ -978,13 +978,14 @@ function startFirebaseRealtimeListener(options = {}) {
   firebaseRealtimeListenerUrl = url;
   try {
     firebaseRealtimeListener = new EventSource(url);
+    console.info('[cloud][listener] conectado', { url });
     const handleEvent = () => {
       Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
     };
     firebaseRealtimeListener.addEventListener('put', handleEvent);
     firebaseRealtimeListener.addEventListener('patch', handleEvent);
     firebaseRealtimeListener.onerror = () => {
-      console.warn('[sync][realtime] Listener desconectado. Reintentando...', { url, useToken });
+      console.warn('[cloud][listener] desconectado, reintentando', { url, useToken });
       try { firebaseRealtimeListener?.close(); } catch {}
       firebaseRealtimeListener = null;
       if (realtimeReconnectTimer) clearTimeout(realtimeReconnectTimer);
@@ -2538,7 +2539,7 @@ function renderDebtors() {
     debtPersonTitle.insertAdjacentElement('afterend', debtPersonTotal);
   }
   const grouped = new Map();
-  state.sales.filter((s) => Number(s.debtAmount || 0) > 0 && s.debtorId).forEach((s) => {
+  state.sales.filter((s) => Number(s.debtAmount || 0) > 0 && s.debtorId && s.paymentStatus !== 'realizado').forEach((s) => {
     if (!grouped.has(s.debtorId)) grouped.set(s.debtorId, []);
     grouped.get(s.debtorId).push(s);
   });
@@ -2553,7 +2554,7 @@ function renderDebtors() {
     const btn = e.target.closest('button[data-debtor-id]');
     if (!btn) return;
     const person = state.people.find((p) => p.id === btn.dataset.debtorId);
-    const sales = state.sales.filter((s) => s.debtorId === btn.dataset.debtorId && Number(s.debtAmount || 0) > 0);
+    const sales = state.sales.filter((s) => s.debtorId === btn.dataset.debtorId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
     const total = sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
     state.activeDebtorId = btn.dataset.debtorId;
     debtPersonTitle.textContent = `${personFullName(person)} · ${person?.description || '-'} · Tel: ${person?.phone || '-'}`;
@@ -3224,7 +3225,7 @@ function renderSummary() {
     return;
   }
 
-  const sales = salesForActiveCashBox().filter((s) => !s.carryOverDebt);
+  const sales = salesForActiveCashBox().filter((s) => !s.carryOverDebt && s.syncState !== 'failed');
   console.info('[sale][summary] calculando resumen', { activeCashBoxId: state.activeCashBoxId || '', salesCount: sales.length });
   const debtPayments = activeDebtPayments().filter((p) => p.cashBoxId === state.activeCashBoxId);
   const cashSales = sales.reduce((a, s) => a + Number(s.breakdown?.cash || 0), 0);
@@ -3620,7 +3621,10 @@ function renderSalesHistory() {
     salesUserFilter.innerHTML = users.join('');
     salesUserFilter.value = prev;
   }
-  const validSales = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt).map((sale) => ({ ...sale, saleStatus: 'OK', saleStatusClass: '' }));
+  const validSales = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt).map((sale) => {
+    if (sale.syncState === 'failed') return { ...sale, saleStatus: 'VENTA NO REGISTRADA', saleStatusClass: 'sale-unregistered' };
+    return { ...sale, saleStatus: 'OK', saleStatusClass: '' };
+  });
   console.info('[sale][history] render historial', { activeCashBoxId: state.activeCashBoxId || '', validSalesCount: validSales.length, deletedSalesCount: (state.deletedSales || []).length });
   const deletedSales = (state.deletedSales || []).filter((sale) => !state.activeCashBoxId || sale.cashBoxId === state.activeCashBoxId).map((sale) => ({ ...sale, saleStatus: 'ANULADA', saleStatusClass: 'sale-annulled' }));
   let list = [...validSales, ...deletedSales].slice();
@@ -3630,10 +3634,11 @@ function renderSalesHistory() {
   list.sort((a, b) => new Date(b.createdAt || b.deletedAt || 0) - new Date(a.createdAt || a.deletedAt || 0));
   salesTable.innerHTML = list.length ? list.map((sale) => {
     const isAnnulled = sale.saleStatus === 'ANULADA';
+    const isUnregistered = sale.saleStatus === 'VENTA NO REGISTRADA';
     const actions = isAnnulled
       ? `<span class="muted">Venta anulada${sale.deletedBy ? ` · eliminado por ${sale.deletedBy}` : ''}</span>`
       : `<button type="button" class="secondary" data-sale-act="view" data-sale-id="${sale.id}">Ver Venta</button> <button type="button" class="secondary" data-sale-act="invoice" data-sale-id="${sale.id}">Ver factura</button>${hasPermission('deleteSales') ? ` <button type="button" class="secondary" data-sale-act="edit" data-sale-id="${sale.id}">Editar venta</button> <button type="button" class="secondary" data-sale-act="del" data-sale-id="${sale.id}">Eliminar venta</button>` : ''}`;
-    return `<tr style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}">${sale.saleStatus}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
+    return `<tr style="${(isAnnulled || isUnregistered) ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${(isAnnulled || isUnregistered) ? 'color:#c1121f;font-weight:700;' : ''}">${sale.saleStatus}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
   }).join('') : '<tr><td colspan="7">Sin ventas.</td></tr>';
 }
 
@@ -3785,11 +3790,13 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
         anuladoPorVentaId: ''
       });
     });
-    persist();
+    persist({ module: 'sale' });
     renderDebtors();
     renderSummary();
   renderSoldProductsList();
     renderDebtPayments();
+    Promise.resolve().then(() => syncToCloud()).catch((err) => console.error('[sale][sync] error sincronizando pago de deuda', err));
+    Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
     overlay.remove();
   });
 }
@@ -3924,6 +3931,28 @@ function renderDebtPayments() {
 }
 
 
+function stripHeavyDataUrl(value) {
+  const raw = String(value || '');
+  if (!raw.startsWith('data:image/')) return value;
+  return '';
+}
+
+function sanitizeCloudPayload(payload) {
+  const out = { ...payload };
+  out.settings = { ...(payload.settings || {}) };
+  out.settings.logoDataUrl = stripHeavyDataUrl(out.settings.logoDataUrl);
+  if (out.settings.billing && typeof out.settings.billing === 'object') {
+    out.settings.billing = { ...out.settings.billing, logoDataUrl: stripHeavyDataUrl(out.settings.billing.logoDataUrl) };
+  }
+  out.products = (payload.products || []).map((p) => ({ ...p, imageDataUrl: stripHeavyDataUrl(p?.imageDataUrl) }));
+  out.categoryImages = Object.fromEntries(Object.entries(payload.categoryImages || {}).map(([k, v]) => [k, stripHeavyDataUrl(v)]));
+  console.info('[cloud][images]', {
+    strippedMainLogo: Boolean(payload.settings?.logoDataUrl && String(payload.settings.logoDataUrl).startsWith('data:image/')),
+    strippedBillingLogo: Boolean(payload.settings?.billing?.logoDataUrl && String(payload.settings.billing.logoDataUrl).startsWith('data:image/'))
+  });
+  return out;
+}
+
 function snapshotPayload() {
   return {
     products: state.products,
@@ -3977,6 +4006,26 @@ function mergeByIdPreferRemote(remoteList = [], localList = [], tombstones = [])
   return [...map.values()];
 }
 
+function mergeByIdPreferLocal(remoteList = [], localList = [], tombstones = []) {
+  remoteList = normalizeCollectionToArray(remoteList);
+  localList = normalizeCollectionToArray(localList);
+  const map = new Map();
+  const removed = new Set((tombstones || []).map((x) => String(x)));
+  remoteList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key)) return;
+    map.set(key, item);
+  });
+  localList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key)) return;
+    map.set(key, item);
+  });
+  return [...map.values()];
+}
+
 function mergeDeletedRecordIds(remoteDeleted = {}, localDeleted = {}) {
   const keys = ['cashClosings', 'sales'];
   const out = {};
@@ -4015,6 +4064,7 @@ function mergeCashBoxes(remoteBoxes = [], localBoxes = []) {
 async function syncToCloud(options = {}) {
   if (!state.settings.firebaseDbUrl) return;
   await ensureCloudSeedData();
+  console.info('[cloud][sync] inicio');
   const makeSyncError = (code, stage, status, message, extra = {}) => Object.assign(new Error(message), { code, stage, status, ...extra });
   const token = normalizedFirebaseToken();
   const authModes = token ? [true, false] : [false];
@@ -4038,17 +4088,19 @@ async function syncToCloud(options = {}) {
       let remoteData = null;
       try { remoteData = await remoteResp.json(); } catch { remoteData = null; }
       const remoteUpdatedAt = Number(remoteData?.updatedAt || 0);
-      const payload = snapshotPayload();
+      const rawPayload = snapshotPayload();
+      const payload = sanitizeCloudPayload(rawPayload);
       console.info('[users][sync]', { usersCount: payload.users?.length || 0 });
       console.info('[settings][sync]', { title1: payload.settings?.title1 || '', hasLogo: Boolean(payload.settings?.logoDataUrl) });
       console.info('[sale][sync]', { salesCount: payload.sales?.length || 0, activeCashBoxId: payload.activeCashBoxId || '' });
+      console.info('[cloud][payload-size]', { bytes: JSON.stringify(payload).length });
       const mergedDeleted = mergeDeletedRecordIds(remoteData?.deletedRecordIds, payload.deletedRecordIds);
       payload.deletedRecordIds = mergedDeleted;
-      payload.sales = mergeByIdPreferRemote(remoteData?.sales, payload.sales, mergedDeleted.sales);
+      payload.sales = mergeByIdPreferLocal(remoteData?.sales, payload.sales, mergedDeleted.sales);
       payload.cashClosings = mergeByIdPreferRemote(remoteData?.cashClosings, payload.cashClosings, mergedDeleted.cashClosings);
       payload.deletedSales = mergeByIdPreferRemote(remoteData?.deletedSales, payload.deletedSales);
-      payload.outflows = mergeByIdPreferRemote(remoteData?.outflows, payload.outflows);
-      payload.debtPayments = mergeByIdPreferRemote(remoteData?.debtPayments, payload.debtPayments);
+      payload.outflows = mergeByIdPreferLocal(remoteData?.outflows, payload.outflows);
+      payload.debtPayments = mergeByIdPreferLocal(remoteData?.debtPayments, payload.debtPayments);
       payload.cashBoxes = mergeCashBoxes(remoteData?.cashBoxes, payload.cashBoxes);
       if (!payload.activeCashBoxId && remoteData?.activeCashBoxId) payload.activeCashBoxId = remoteData.activeCashBoxId;
       if (payload.systemStatus === 'CAJA_CERRADA' && remoteData?.systemStatus === 'CAJA_ABIERTA' && payload.activeCashBoxId === remoteData.activeCashBoxId) {
@@ -4072,6 +4124,7 @@ async function syncToCloud(options = {}) {
       console.info('[settings][firebase] settings escritos en payload compartido', { title1: payload.settings?.title1 || '', hasLogo: Boolean(payload.settings?.logoDataUrl) });
       if (syncStatus) syncStatus.textContent = 'Sincronización enviada.';
       if (token && !includeToken) console.info('[sync][token] Sincronización exitosa ignorando token (token innecesario o inválido).');
+      console.info('[cloud][sync] fin', { updatedAt: payload.updatedAt });
       return;
     } catch (err) {
       lastError = err;
@@ -4082,6 +4135,7 @@ async function syncToCloud(options = {}) {
         continue;
       }
       console.error('[sync][rtdb] Error en sincronización.', { modeLabel, code: err?.code, status: err?.status, stage: err?.stage, message: err?.message });
+      console.error('[cloud][sync] error', { message: err?.message, code: err?.code, status: err?.status });
       break;
     }
   }
@@ -4092,6 +4146,7 @@ async function syncToCloud(options = {}) {
 async function pullFromCloud(options = {}) {
   if (!state.settings.firebaseDbUrl) return;
   await ensureCloudSeedData();
+  console.info('[cloud][pull] inicio', { force: Boolean(options.force) });
   const now = Date.now();
   if (!options.force && (now - lastCloudPullAt) < CLOUD_PULL_MIN_INTERVAL_MS) return;
   if (cloudPullInFlight) return cloudPullInFlight;
@@ -4122,6 +4177,7 @@ async function pullFromCloud(options = {}) {
       }
       const dataRaw = await r.json();
       data = normalizeCloudSeedObject(dataRaw);
+      console.info('[cloud][payload-size]', { bytes: JSON.stringify(dataRaw || {}).length, source: 'pull' });
       break;
     }
     if (!data) throw new Error('[pull] No fue posible leer RTDB con token ni sin token.');
@@ -4129,6 +4185,7 @@ async function pullFromCloud(options = {}) {
       return;
     }
     applyCloudData(data);
+    console.info('[cloud][pull] fin', { updatedAt: data.updatedAt, rootUrlUsed });
     console.info('[cloud] estado sincronizado', { activeCashBoxId: state.activeCashBoxId, systemStatus: state.systemStatus, rootUrlUsed });
     const currentRoute = normalizeRoute(window.location.hash || '#home');
     const inSettingsBranch = currentRoute === 'settings' || currentRoute.startsWith('settings/');
@@ -4517,7 +4574,7 @@ async function registerSale() {
     console.error('[sale] fallo al reservar correlativo', { message: err?.message, code: err?.code, status: err?.status, context: saleDebugContext({ activeCashBoxId }) });
     return setMsg(saleMessage, 'fallo al reservar correlativo', false);
   }
-  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
+  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false, syncState: 'pending' };
   console.info('[sale][create] Venta generada', saleDebugContext({ saleId: sale.id, sale, orderCounters: state.orderCounters }));
   sale.invoiceSnapshot = buildInvoiceData(sale);
   if (isStockEnabled()) {
@@ -4554,9 +4611,24 @@ async function registerSale() {
     else console.error('[sale][sync] fallo al confirmar venta en RTDB', { error: err, context: saleDebugContext({ saleId: sale.id }) });
   }
   if (!confirmed) {
-    state.sales = state.sales.filter((x) => x.id !== sale.id);
-    persist({ sync: false });
+    sale.syncState = 'failed';
+    sale.syncFailureAt = new Date().toISOString();
+    sale.syncFailureReason = 'No se pudo confirmar en cloud';
+    console.error('[sale][failed]', { saleId: sale.id, orderNumber: sale.orderNumber, total: sale.total, user: sale.user });
+    persist({ sync: false, module: 'sale' });
+    renderSalesHistory();
     return setMsg(saleMessage, 'fallo al confirmar venta en RTDB', false);
+  }
+  sale.syncState = 'confirmed';
+  const visibleInHistory = salesForActiveCashBox().some((x) => x.id === sale.id && x.syncState !== 'failed');
+  if (!visibleInHistory) {
+    sale.syncState = 'failed';
+    sale.syncFailureAt = new Date().toISOString();
+    sale.syncFailureReason = 'No quedó visible en historial tras confirmación';
+    console.error('[sale][failed]', { saleId: sale.id, reason: sale.syncFailureReason });
+    persist({ sync: false, module: 'sale' });
+    renderSalesHistory();
+    return setMsg(saleMessage, 'fallo al integrar venta al historial', false);
   }
   renderCart();
   renderOrders(false);
