@@ -1150,9 +1150,8 @@ function isCashOpen() {
 
 function salesForActiveCashBox() {
   const list = Array.isArray(state.sales) ? state.sales : [];
-  if (!state.activeCashBoxId) return list;
-  const scoped = list.filter((sale) => sale.cashBoxId === state.activeCashBoxId);
-  return scoped.length ? scoped : list;
+  if (!state.activeCashBoxId) return [];
+  return list.filter((sale) => sale.cashBoxId === state.activeCashBoxId);
 }
 
 function isSessionExpired() {
@@ -3225,7 +3224,7 @@ function renderSummary() {
     return;
   }
 
-  const sales = salesForActiveCashBox().filter((s) => !s.carryOverDebt && s.syncState !== 'failed');
+  const sales = salesForActiveCashBox().filter((s) => !s.carryOverDebt);
   console.info('[sale][summary] calculando resumen', { activeCashBoxId: state.activeCashBoxId || '', salesCount: sales.length });
   const debtPayments = activeDebtPayments().filter((p) => p.cashBoxId === state.activeCashBoxId);
   const cashSales = sales.reduce((a, s) => a + Number(s.breakdown?.cash || 0), 0);
@@ -3621,10 +3620,7 @@ function renderSalesHistory() {
     salesUserFilter.innerHTML = users.join('');
     salesUserFilter.value = prev;
   }
-  const validSales = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt).map((sale) => {
-    if (sale.syncState === 'failed') return { ...sale, saleStatus: 'VENTA NO REGISTRADA', saleStatusClass: 'sale-unregistered' };
-    return { ...sale, saleStatus: 'OK', saleStatusClass: '' };
-  });
+  const validSales = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt).map((sale) => ({ ...sale, saleStatus: 'OK', saleStatusClass: '' }));
   console.info('[sale][history] render historial', { activeCashBoxId: state.activeCashBoxId || '', validSalesCount: validSales.length, deletedSalesCount: (state.deletedSales || []).length });
   const deletedSales = (state.deletedSales || []).filter((sale) => !state.activeCashBoxId || sale.cashBoxId === state.activeCashBoxId).map((sale) => ({ ...sale, saleStatus: 'ANULADA', saleStatusClass: 'sale-annulled' }));
   let list = [...validSales, ...deletedSales].slice();
@@ -3634,11 +3630,10 @@ function renderSalesHistory() {
   list.sort((a, b) => new Date(b.createdAt || b.deletedAt || 0) - new Date(a.createdAt || a.deletedAt || 0));
   salesTable.innerHTML = list.length ? list.map((sale) => {
     const isAnnulled = sale.saleStatus === 'ANULADA';
-    const isUnregistered = sale.saleStatus === 'VENTA NO REGISTRADA';
     const actions = isAnnulled
       ? `<span class="muted">Venta anulada${sale.deletedBy ? ` · eliminado por ${sale.deletedBy}` : ''}</span>`
       : `<button type="button" class="secondary" data-sale-act="view" data-sale-id="${sale.id}">Ver Venta</button> <button type="button" class="secondary" data-sale-act="invoice" data-sale-id="${sale.id}">Ver factura</button>${hasPermission('deleteSales') ? ` <button type="button" class="secondary" data-sale-act="edit" data-sale-id="${sale.id}">Editar venta</button> <button type="button" class="secondary" data-sale-act="del" data-sale-id="${sale.id}">Eliminar venta</button>` : ''}`;
-    return `<tr style="${(isAnnulled || isUnregistered) ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${(isAnnulled || isUnregistered) ? 'color:#c1121f;font-weight:700;' : ''}">${sale.saleStatus}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
+    return `<tr style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}">${sale.saleStatus}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
   }).join('') : '<tr><td colspan="7">Sin ventas.</td></tr>';
 }
 
@@ -4574,7 +4569,7 @@ async function registerSale() {
     console.error('[sale] fallo al reservar correlativo', { message: err?.message, code: err?.code, status: err?.status, context: saleDebugContext({ activeCashBoxId }) });
     return setMsg(saleMessage, 'fallo al reservar correlativo', false);
   }
-  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false, syncState: 'pending' };
+  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
   console.info('[sale][create] Venta generada', saleDebugContext({ saleId: sale.id, sale, orderCounters: state.orderCounters }));
   sale.invoiceSnapshot = buildInvoiceData(sale);
   if (isStockEnabled()) {
@@ -4611,24 +4606,9 @@ async function registerSale() {
     else console.error('[sale][sync] fallo al confirmar venta en RTDB', { error: err, context: saleDebugContext({ saleId: sale.id }) });
   }
   if (!confirmed) {
-    sale.syncState = 'failed';
-    sale.syncFailureAt = new Date().toISOString();
-    sale.syncFailureReason = 'No se pudo confirmar en cloud';
-    console.error('[sale][failed]', { saleId: sale.id, orderNumber: sale.orderNumber, total: sale.total, user: sale.user });
+    state.sales = state.sales.filter((x) => x.id !== sale.id);
     persist({ sync: false, module: 'sale' });
-    renderSalesHistory();
-    return setMsg(saleMessage, 'fallo al confirmar venta en RTDB', false);
-  }
-  sale.syncState = 'confirmed';
-  const visibleInHistory = salesForActiveCashBox().some((x) => x.id === sale.id && x.syncState !== 'failed');
-  if (!visibleInHistory) {
-    sale.syncState = 'failed';
-    sale.syncFailureAt = new Date().toISOString();
-    sale.syncFailureReason = 'No quedó visible en historial tras confirmación';
-    console.error('[sale][failed]', { saleId: sale.id, reason: sale.syncFailureReason });
-    persist({ sync: false, module: 'sale' });
-    renderSalesHistory();
-    return setMsg(saleMessage, 'fallo al integrar venta al historial', false);
+    return setMsg(saleMessage, 'No se pudo confirmar la venta en la nube. Intenta nuevamente.', false);
   }
   renderCart();
   renderOrders(false);
