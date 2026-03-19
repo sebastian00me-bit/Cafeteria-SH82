@@ -947,6 +947,7 @@ function applyCloudData(data) {
   const normalized = normalizeCloudSeedObject(data);
   console.info('[users][apply]', { usersCount: Array.isArray(normalized.users) ? normalized.users.length : -1 });
   console.info('[settings][apply]', { title1: normalized.settings?.title1 || '', hasLogo: Boolean(normalized.settings?.logoDataUrl) });
+  console.info('[billing][apply]', { hasBillingLogo: Boolean(normalized.settings?.billing?.logoDataUrl), billingEnabled: Boolean(normalized.settings?.billing?.enabled) });
   console.info('[sale][apply]', { salesCount: Array.isArray(normalized.sales) ? normalized.sales.length : -1, activeCashBoxId: normalized.activeCashBoxId || '' });
   console.info('[debt][apply]', { debtPaymentsCount: Array.isArray(normalized.debtPayments) ? normalized.debtPayments.length : -1 });
   state.lastSyncAt = Number(normalized.updatedAt || Date.now());
@@ -3952,14 +3953,12 @@ function stripHeavyDataUrl(value) {
 function sanitizeCloudPayload(payload) {
   const out = { ...payload };
   out.settings = { ...(payload.settings || {}) };
-  if (out.settings.billing && typeof out.settings.billing === 'object') {
-    out.settings.billing = { ...out.settings.billing, logoDataUrl: stripHeavyDataUrl(out.settings.billing.logoDataUrl) };
-  }
+  if (out.settings.billing && typeof out.settings.billing === 'object') out.settings.billing = { ...out.settings.billing };
   out.products = (payload.products || []).map((p) => ({ ...p, imageDataUrl: stripHeavyDataUrl(p?.imageDataUrl) }));
   out.categoryImages = Object.fromEntries(Object.entries(payload.categoryImages || {}).map(([k, v]) => [k, stripHeavyDataUrl(v)]));
   console.info('[cloud][images]', {
     strippedMainLogo: false,
-    strippedBillingLogo: Boolean(payload.settings?.billing?.logoDataUrl && String(payload.settings.billing.logoDataUrl).startsWith('data:image/'))
+    strippedBillingLogo: false
   });
   return out;
 }
@@ -4305,12 +4304,20 @@ function showLogin() {
   setMsg(loginMessage, '');
 }
 function showHome() {
+  console.info('[nav][render-home]');
   loginScreen?.classList.add('hidden');
   homeScreen?.classList.remove('hidden');
   posScreen?.classList.add('hidden');
   stockScreen?.classList.add('hidden');
   warehouseScreen?.classList.add('hidden');
+  Array.from(homeScreen?.children || []).forEach((el) => el.classList.remove('hidden'));
   settingsCard?.classList.add('hidden');
+  console.info('[nav][screen-state]', {
+    loginHidden: loginScreen?.classList.contains('hidden'),
+    homeHidden: homeScreen?.classList.contains('hidden'),
+    posHidden: posScreen?.classList.contains('hidden'),
+    settingsHidden: settingsCard?.classList.contains('hidden')
+  });
   renderHomeActions();
   renderTabsByPermissions();
   renderCashStatus();
@@ -4663,10 +4670,15 @@ async function registerSale() {
     else console.error('[sale][sync] fallo al confirmar venta en RTDB', { error: err, context: saleDebugContext({ saleId: sale.id }) });
   }
   if (!confirmed) {
+    console.error('[sale][rollback]', { saleId: sale.id, orderNumber: sale.orderNumber });
     state.sales = state.sales.filter((x) => x.id !== sale.id);
     persist({ sync: false, module: 'sale' });
     return setMsg(saleMessage, 'No se pudo confirmar la venta en la nube. Intenta nuevamente.', false);
   }
+  setTimeout(() => {
+    const exists = (state.sales || []).some((x) => x.id === sale.id);
+    if (!exists) console.error('[sale][lost-detection]', { saleId: sale.id, orderNumber: sale.orderNumber, activeCashBoxId: state.activeCashBoxId || '' });
+  }, 1200);
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
@@ -4936,9 +4948,11 @@ function ensureGlobalNavButtons() {
   backBtn.onclick = () => {
     const current = normalizeRoute(window.location.hash || '#home');
     if (current === 'home') return;
+    console.info('[nav][go-back]', { current, target: parentRoute(current) });
     navigateTo(parentRoute(current), { replace: true });
   };
   homeBtn.onclick = () => {
+    console.info('[nav][go-home]');
     navStack = ['home'];
     navigateTo('home', { replace: true });
   };
@@ -4987,11 +5001,13 @@ function ensureSettingsNavButtons() {
 }
 
 function renderRoute(route) {
+  console.info('[nav][route-change]', { route });
   if (!state.currentUser) return showLogin();
   if (route === 'home') { showHome(); enforceSingleActiveView(route); return; }
   if (route === 'stock') { showStockPage(); enforceSingleActiveView(route); return; }
   if (route === 'warehouse' || route === 'warehouse/gestion' || route === 'warehouse/movimientos' || route === 'warehouse/movimientos/archivados' || route.startsWith('warehouse/movimientos/archivados/')) { showWarehousePage(); enforceSingleActiveView(route); return; }
   if (route === 'settings') {
+    console.info('[nav][render-settings]');
     hideAllScreens();
     homeScreen?.classList.remove('hidden');
     homeScreen?.classList.add('settings-mode');
@@ -5036,6 +5052,7 @@ function renderRoute(route) {
 
 function applyRoute() {
   const route = normalizeRoute(window.location.hash);
+  console.info('[nav][route-change]', { route, source: 'applyRoute' });
   if (!state.currentUser) return showLogin();
   ensureGlobalNavButtons();
   if (!applyingRoute) {
@@ -5048,6 +5065,7 @@ function applyRoute() {
 
 function navigateTo(route, opts = {}) {
   const next = normalizeRoute(route);
+  console.info('[nav][route-change]', { route: next, source: 'navigateTo', replace: Boolean(opts.replace) });
   if (state.currentUser && next !== 'home' && !validateSessionPolicy({ silent: false })) return;
   ensureGlobalNavButtons();
   const current = navStack[navStack.length - 1] || 'home';
@@ -5137,6 +5155,7 @@ async function saveSalesConfigSettings() {
 
 async function saveBillingSettings() {
   if (!hasPermission('accessSettings')) return setMsg(homeMessage, 'No tienes permiso para facturación.', false);
+  console.info('[billing][save]', { hasCurrentLogo: Boolean(state.settings?.billing?.logoDataUrl) });
   const billing = normalizeBillingSettings();
   billing.enabled = Boolean(billingEnabledInput?.checked);
   billing.title = String(billingTitleInput?.value || billing.title || 'CAFETERIA SH82').trim() || 'CAFETERIA SH82';
@@ -5159,9 +5178,16 @@ async function saveBillingSettings() {
   billing.autoPrintEnabled = Boolean(billingAutoPrintInput?.checked);
   const applyPersist = async () => {
     state.settings.billing = { ...billing };
-    persist();
-    try { await syncToCloud(); } catch (err) { console.error('[billing] sync save failed', err); }
+    console.info('[billing][persist]', { hasLogo: Boolean(state.settings.billing.logoDataUrl) });
+    persist({ module: 'settings' });
+    try {
+      await syncToCloud();
+      console.info('[billing][sync]', { hasLogo: Boolean(state.settings.billing.logoDataUrl) });
+      await pullFromCloud({ force: true });
+      console.info('[billing][pull]', { hasLogo: Boolean(state.settings?.billing?.logoDataUrl) });
+    } catch (err) { console.error('[billing] sync save failed', err); }
     applySettings();
+    console.info('[billing][logo-render]', { hasLogo: Boolean(state.settings?.billing?.logoDataUrl) });
     if (billingConfigStatus) billingConfigStatus.textContent = 'Configuración de facturación guardada y sincronizada.';
   };
   const file = billingLogoInput?.files?.[0];
@@ -5172,6 +5198,7 @@ async function saveBillingSettings() {
   const reader = new FileReader();
   reader.onload = async () => {
     billing.logoDataUrl = String(reader.result || '');
+    console.info('[billing][logo-save]', { length: billing.logoDataUrl.length });
     if (billingLogoInput) billingLogoInput.value = '';
     await applyPersist();
   };
@@ -6021,6 +6048,7 @@ async function bootstrap() {
     }
   }
   cloudHydrated = cloudHydrated || cloudBootHydrated;
+  console.info('[boot][sales-ready]', { salesCount: state.sales?.length || 0, cloudHydrated });
   startFirebaseRealtimeListener();
   maybeForceLogoutFromClosure();
   if (state.currentUser && validSession && validateSessionPolicy({ silent: true })) {
