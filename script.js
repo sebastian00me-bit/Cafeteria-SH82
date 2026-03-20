@@ -391,6 +391,20 @@ state.salesHistoryMode = 'all';
 
 const SHARED_DB_PATH = 'cafeteria_shared';
 const LEGACY_DB_PATH = 'cafeteria_BaseDatos2';
+// Estructura modular RTDB para reducir descargas:
+// - config: settings/categorías/usuarios y datos de UI relativamente estables.
+// - catalog: catálogo de productos (stock/precios/combos).
+// - operations: ventas/caja/deudas/correlativos, flujo vivo multiusuario.
+// - warehouse: componentes y recetas (links de componentes por producto).
+// - history: históricos pesados (cierres, eliminadas, movimientos archivables).
+// Cada función de sync/pull debe operar por módulo (no por snapshot raíz completo).
+const CLOUD_MODULE_PATHS = {
+  config: 'config',
+  catalog: 'catalog',
+  operations: 'operations',
+  warehouse: 'warehouse',
+  history: 'history'
+};
 const defaultCloudConfig = {
   firebaseDbUrl: 'https://cafeteria-sh82-3dea3-default-rtdb.firebaseio.com',
   firebaseDbToken: '',
@@ -509,6 +523,114 @@ function normalizeCollectionToArray(value) {
   return [];
 }
 
+function collectionToObjectById(list = []) {
+  const out = {};
+  normalizeCollectionToArray(list).forEach((item) => {
+    if (!item?.id) return;
+    out[String(item.id)] = item;
+  });
+  return out;
+}
+
+function cloudModulePayloadFromState() {
+  return {
+    config: {
+      settings: state.settings || {},
+      categories: state.categories || [],
+      subcategories: state.subcategories || {},
+      categoryImages: state.categoryImages || {},
+      users: state.users || [],
+      people: state.people || [],
+      stockConfig: state.stockConfig || { enabled: false, min: 0 },
+      userSalesModes: state.userSalesModes || {},
+      touchUiConfigByUser: state.touchUiConfigByUser || {},
+      forceLogoutAt: Number(state.forceLogoutAt || 0),
+      updatedAt: Date.now()
+    },
+    catalog: {
+      products: collectionToObjectById(state.products || []),
+      updatedAt: Date.now()
+    },
+    operations: {
+      sales: collectionToObjectById(state.sales || []),
+      outflows: collectionToObjectById(state.outflows || []),
+      debtPayments: collectionToObjectById(state.debtPayments || []),
+      orderCounters: state.orderCounters || {},
+      cashBoxes: collectionToObjectById(state.cashBoxes || []),
+      activeCashBoxId: state.activeCashBoxId || '',
+      systemStatus: state.systemStatus || 'CAJA_CERRADA',
+      cashSession: state.cashSession || null,
+      generalCash: state.generalCash || { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 },
+      generalClosings: state.generalClosings || [],
+      updatedAt: Date.now()
+    },
+    warehouse: {
+      components: collectionToObjectById(state.components || []),
+      componentLinks: state.componentLinks || {},
+      updatedAt: Date.now()
+    },
+    history: {
+      cashClosings: collectionToObjectById(state.cashClosings || []),
+      deletedSales: collectionToObjectById(state.deletedSales || []),
+      componentMoves: collectionToObjectById(state.componentMoves || []),
+      deletedRecordIds: state.deletedRecordIds || { cashClosings: [], sales: [] },
+      updatedAt: Date.now()
+    }
+  };
+}
+
+function normalizeCloudModules(raw = {}) {
+  const flat = cloudSeedTemplate();
+  const data = (raw && typeof raw === 'object') ? raw : {};
+  const config = data.config || {};
+  const catalog = data.catalog || {};
+  const operations = data.operations || {};
+  const warehouse = data.warehouse || {};
+  const history = data.history || {};
+
+  flat.settings = (config.settings && typeof config.settings === 'object') ? { ...config.settings } : {};
+  flat.categories = Array.isArray(config.categories) ? config.categories : [];
+  flat.subcategories = (config.subcategories && typeof config.subcategories === 'object' && !Array.isArray(config.subcategories)) ? config.subcategories : {};
+  flat.categoryImages = (config.categoryImages && typeof config.categoryImages === 'object' && !Array.isArray(config.categoryImages)) ? config.categoryImages : {};
+  flat.users = normalizeCollectionToArray(config.users);
+  flat.people = Array.isArray(config.people) ? config.people : [];
+  flat.stockConfig = (config.stockConfig && typeof config.stockConfig === 'object') ? config.stockConfig : { enabled: false, min: 0 };
+  flat.userSalesModes = (config.userSalesModes && typeof config.userSalesModes === 'object') ? config.userSalesModes : {};
+  flat.touchUiConfigByUser = (config.touchUiConfigByUser && typeof config.touchUiConfigByUser === 'object') ? config.touchUiConfigByUser : {};
+  flat.forceLogoutAt = Number(config.forceLogoutAt || 0);
+
+  flat.products = normalizeCollectionToArray(catalog.products);
+  flat.sales = normalizeCollectionToArray(operations.sales);
+  flat.outflows = normalizeCollectionToArray(operations.outflows);
+  flat.debtPayments = normalizeCollectionToArray(operations.debtPayments);
+  flat.orderCounters = (operations.orderCounters && typeof operations.orderCounters === 'object' && !Array.isArray(operations.orderCounters)) ? operations.orderCounters : {};
+  flat.cashBoxes = normalizeCollectionToArray(operations.cashBoxes);
+  flat.activeCashBoxId = String(operations.activeCashBoxId || '');
+  flat.systemStatus = operations.systemStatus || 'CAJA_CERRADA';
+  flat.cashSession = (operations.cashSession && typeof operations.cashSession === 'object') ? operations.cashSession : null;
+  flat.generalCash = (operations.generalCash && typeof operations.generalCash === 'object') ? operations.generalCash : flat.generalCash;
+  flat.generalClosings = Array.isArray(operations.generalClosings) ? operations.generalClosings : [];
+
+  flat.components = normalizeCollectionToArray(warehouse.components);
+  flat.componentLinks = (warehouse.componentLinks && typeof warehouse.componentLinks === 'object' && !Array.isArray(warehouse.componentLinks)) ? warehouse.componentLinks : {};
+
+  flat.cashClosings = normalizeCollectionToArray(history.cashClosings);
+  flat.deletedSales = normalizeCollectionToArray(history.deletedSales);
+  flat.componentMoves = normalizeCollectionToArray(history.componentMoves);
+  flat.deletedRecordIds = (history.deletedRecordIds && typeof history.deletedRecordIds === 'object' && !Array.isArray(history.deletedRecordIds))
+    ? history.deletedRecordIds
+    : { cashClosings: [], sales: [] };
+  flat.updatedAt = Math.max(
+    Number(config.updatedAt || 0),
+    Number(catalog.updatedAt || 0),
+    Number(operations.updatedAt || 0),
+    Number(warehouse.updatedAt || 0),
+    Number(history.updatedAt || 0),
+    Date.now()
+  );
+  return normalizeCloudSeedObject(flat);
+}
+
 function normalizeCloudSeedObject(raw) {
   const base = cloudSeedTemplate();
   const data = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? { ...raw } : {};
@@ -565,20 +687,54 @@ async function ensureCloudSeedData(options = {}) {
       }
       let raw = null;
       try { raw = await resp.json(); } catch { raw = null; }
-      const validObject = raw && typeof raw === 'object' && !Array.isArray(raw);
-      if (validObject) {
-        cloudSeedValidatedAt = Date.now();
-        return;
-      }
-      console.warn('[seed] Raíz inválida detectada. Re-sembrando cafeteria_shared.', { modeLabel, currentType: typeof raw, currentValue: raw });
-      const seeded = normalizeCloudSeedObject(raw);
-      const putResp = await fetch(rootUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(seeded) });
-      if (!putResp.ok) {
-        if (includeToken && (putResp.status === 401 || putResp.status === 403)) continue;
-        throw new Error(`[seed] PUT seed fallo ${putResp.status}`);
+      const validObject = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+      const hasModules = Object.values(CLOUD_MODULE_PATHS).every((path) => validObject[path] && typeof validObject[path] === 'object');
+      if (!hasModules) {
+        const legacyNormalized = normalizeCloudSeedObject(validObject);
+        const modularSeed = cloudModulePayloadFromState();
+        modularSeed.config = { ...modularSeed.config, ...{
+          settings: legacyNormalized.settings,
+          categories: legacyNormalized.categories,
+          subcategories: legacyNormalized.subcategories,
+          categoryImages: legacyNormalized.categoryImages,
+          users: legacyNormalized.users,
+          people: legacyNormalized.people,
+          stockConfig: legacyNormalized.stockConfig,
+          userSalesModes: legacyNormalized.userSalesModes,
+          touchUiConfigByUser: legacyNormalized.touchUiConfigByUser,
+          forceLogoutAt: legacyNormalized.forceLogoutAt
+        }};
+        modularSeed.catalog.products = collectionToObjectById(legacyNormalized.products);
+        modularSeed.operations = {
+          ...modularSeed.operations,
+          sales: collectionToObjectById(legacyNormalized.sales),
+          outflows: collectionToObjectById(legacyNormalized.outflows),
+          debtPayments: collectionToObjectById(legacyNormalized.debtPayments),
+          orderCounters: legacyNormalized.orderCounters || {},
+          cashBoxes: collectionToObjectById(legacyNormalized.cashBoxes),
+          activeCashBoxId: legacyNormalized.activeCashBoxId || '',
+          systemStatus: legacyNormalized.systemStatus || 'CAJA_CERRADA',
+          cashSession: legacyNormalized.cashSession || null,
+          generalCash: legacyNormalized.generalCash || modularSeed.operations.generalCash,
+          generalClosings: legacyNormalized.generalClosings || []
+        };
+        modularSeed.warehouse.components = collectionToObjectById(legacyNormalized.components);
+        modularSeed.warehouse.componentLinks = legacyNormalized.componentLinks || {};
+        modularSeed.history = {
+          ...modularSeed.history,
+          cashClosings: collectionToObjectById(legacyNormalized.cashClosings),
+          deletedSales: collectionToObjectById(legacyNormalized.deletedSales),
+          componentMoves: collectionToObjectById(legacyNormalized.componentMoves),
+          deletedRecordIds: legacyNormalized.deletedRecordIds || { cashClosings: [], sales: [] }
+        };
+        const putResp = await fetch(rootUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modularSeed) });
+        if (!putResp.ok) {
+          if (includeToken && (putResp.status === 401 || putResp.status === 403)) continue;
+          throw new Error(`[seed] PUT seed modular fallo ${putResp.status}`);
+        }
+        console.info('[seed] Estructura modular creada en cafeteria_shared.', { modeLabel });
       }
       cloudSeedValidatedAt = Date.now();
-      console.info('[seed] cafeteria_shared sembrado correctamente.', { modeLabel });
       return;
     } catch (err) {
       lastError = err;
@@ -893,6 +1049,25 @@ function cloudPathUrl(path, { includeToken = true } = {}) {
   return `${base}/${String(path || '').replace(/^\/+/, '')}.json${qs}`;
 }
 
+async function cloudReadPath(path, { includeToken = true } = {}) {
+  const url = cloudPathUrl(path, { includeToken });
+  if (!url) throw new Error('[cloud] URL inválida para lectura.');
+  const resp = await fetch(url);
+  if (!resp.ok) throw Object.assign(new Error(`[cloud] GET ${path} fallo (${resp.status})`), { status: resp.status, path });
+  return resp.json();
+}
+
+async function cloudWritePath(path, value, { method = 'PUT', includeToken = true } = {}) {
+  const url = cloudPathUrl(path, { includeToken });
+  if (!url) throw new Error('[cloud] URL inválida para escritura.');
+  const resp = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(value)
+  });
+  if (!resp.ok) throw Object.assign(new Error(`[cloud] ${method} ${path} fallo (${resp.status})`), { status: resp.status, path, method });
+}
+
 async function commitSaleToFirebaseTransaction(sale) {
   await ensureCloudSeedData();
   console.info('[sale][commit] Iniciando confirmación RTDB', saleDebugContext({ saleId: sale?.id, salePreview: sale }));
@@ -902,36 +1077,31 @@ async function commitSaleToFirebaseTransaction(sale) {
   for (const includeToken of authModes) {
     const modeLabel = includeToken ? 'token' : 'sin-token';
     try {
-      const rootUrl = buildCloudRootUrl({ includeToken });
-      const rootResp = await fetch(rootUrl);
-      if (!rootResp.ok) {
-        if (includeToken && (rootResp.status === 401 || rootResp.status === 403)) {
-          console.warn('[sale][commit][token] GET root rechazado con token. Reintentando sin token.', { status: rootResp.status });
-          continue;
-        }
-        throw Object.assign(new Error(`[sale][commit][rtdb] GET root fallo (${rootResp.status})`), { code: 'RTDB_HTTP_ROOT_GET', status: rootResp.status, stage: 'root_get', url: rootUrl });
-      }
-      let remoteRaw = null;
-      try { remoteRaw = await rootResp.json(); } catch { remoteRaw = null; }
-      const remote = normalizeCloudSeedObject(remoteRaw);
-      const payload = {
-        ...remote,
-        sales: mergeByIdLatest(remote.sales, state.sales || []),
-        products: mergeByIdLatest(remote.products, state.products || []),
-        updatedAt: Date.now()
-      };
-      const putResp = await fetch(rootUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const saleId = String(sale?.id || '');
+      if (!saleId) throw new Error('sale id requerido');
+      const ts = Date.now();
+      const touchedProducts = new Set();
+      (sale.items || []).forEach((item) => {
+        if (item?.id) touchedProducts.add(String(item.id));
+        const product = state.products.find((p) => String(p?.id || '') === String(item?.id || ''));
+        (product?.combo || []).forEach((comboId) => touchedProducts.add(String(comboId)));
       });
-      if (!putResp.ok) throw Object.assign(new Error(`[sale][commit][rtdb] PUT root fallo (${putResp.status})`), { code: 'RTDB_HTTP_ROOT_PUT', status: putResp.status, stage: 'root_put', url: rootUrl });
-      console.info('[sale][firebase-write]', { saleId: sale.id, rootUrl, salesCount: payload.sales.length });
+      const productsPatch = {};
+      touchedProducts.forEach((id) => {
+        const product = (state.products || []).find((p) => String(p?.id || '') === id);
+        if (product) productsPatch[id] = { ...product };
+      });
+      await cloudWritePath(`operations/sales/${encodeURIComponent(saleId)}`, sale, { includeToken, method: 'PUT' });
+      if (sale?.cashBoxId) await cloudWritePath(`operations/orderCounters/${encodeURIComponent(String(sale.cashBoxId))}`, Number(sale.orderNumber || 0), { includeToken, method: 'PUT' });
+      if (Object.keys(productsPatch).length) await cloudWritePath('catalog/products', productsPatch, { includeToken, method: 'PATCH' });
+      await cloudWritePath('operations/updatedAt', ts, { includeToken, method: 'PUT' });
+      if (Object.keys(productsPatch).length) await cloudWritePath('catalog/updatedAt', ts, { includeToken, method: 'PUT' });
+      console.info('[sale][firebase-write]', { saleId: sale.id, productsTouched: Object.keys(productsPatch).length });
 
-      state.lastSyncAt = Number(payload.updatedAt || Date.now());
+      state.lastSyncAt = Number(ts || Date.now());
       saveLocalState();
       console.info('[sale][state-after-write]', { saleId: sale.id, localSalesCount: state.sales?.length || 0, activeCashBoxId: state.activeCashBoxId || '' });
-      console.info('[sale][commit] Venta confirmada en RTDB', { saleId: sale.id, modeLabel, rootUrl, salesCount: payload.sales.length });
+      console.info('[sale][commit] Venta confirmada en RTDB', { saleId: sale.id, modeLabel });
       return;
     } catch (err) {
       lastError = err;
@@ -944,7 +1114,7 @@ async function commitSaleToFirebaseTransaction(sale) {
 }
 
 function applyCloudData(data) {
-  const normalized = normalizeCloudSeedObject(data);
+  const normalized = normalizeCloudModules(data);
   console.info('[users][apply]', { usersCount: Array.isArray(normalized.users) ? normalized.users.length : -1 });
   console.info('[settings][apply]', { title1: normalized.settings?.title1 || '', hasLogo: Boolean(normalized.settings?.logoDataUrl) });
   console.info('[billing][apply]', { hasBillingLogo: Boolean(normalized.settings?.billing?.logoDataUrl), billingEnabled: Boolean(normalized.settings?.billing?.enabled) });
@@ -988,8 +1158,18 @@ function startFirebaseRealtimeListener(options = {}) {
     console.info('[cloud][listener] conectado', { url });
     bootListenerReady = true;
     console.info('[boot][listener-ready]', { bootListenerReady, url });
-    const handleEvent = () => {
-      Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
+    const handleEvent = (evt) => {
+      let moduleHints = null;
+      try {
+        const payload = JSON.parse(String(evt?.data || '{}'));
+        const path = String(payload?.path || '/');
+        if (path.startsWith('/config')) moduleHints = ['config'];
+        else if (path.startsWith('/catalog')) moduleHints = ['catalog'];
+        else if (path.startsWith('/operations')) moduleHints = ['operations'];
+        else if (path.startsWith('/warehouse')) moduleHints = ['warehouse'];
+        else if (path.startsWith('/history')) moduleHints = ['history'];
+      } catch {}
+      Promise.resolve().then(() => pullFromCloud({ force: true, modules: moduleHints || undefined })).catch(() => {});
     };
     firebaseRealtimeListener.addEventListener('put', handleEvent);
     firebaseRealtimeListener.addEventListener('patch', handleEvent);
@@ -1008,7 +1188,7 @@ function startFirebaseRealtimeListener(options = {}) {
 }
 
 async function pullFromCloudWithTimeout(timeoutMs = 1800) {
-  const pullPromise = pullFromCloud({ force: true });
+  const pullPromise = pullFromCloud({ force: true, modules: ['operations', 'catalog'] });
   const timeoutPromise = new Promise((resolve) => setTimeout(resolve, Math.max(300, Number(timeoutMs || 1800))));
   await Promise.race([pullPromise, timeoutPromise]);
 }
@@ -1056,7 +1236,7 @@ async function reserveNextOrderNumber(cashBoxId) {
     return fallback();
   }
   const counterPath = encodeURIComponent(cashBoxId);
-  const counterUrl = root.replace(/\.json(\?.*)?$/, `/orderCounters/${counterPath}.json$1`);
+  const counterUrl = root.replace(/\.json(\?.*)?$/, `/operations/orderCounters/${counterPath}.json$1`);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const getResp = await fetch(counterUrl, { headers: { 'X-Firebase-ETag': 'true' } });
     if (!getResp.ok) {
@@ -3807,8 +3987,8 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
     renderSummary();
   renderSoldProductsList();
     renderDebtPayments();
-    Promise.resolve().then(() => syncToCloud()).then(() => console.info('[debt][sync] ok')).catch((err) => console.error('[debt][sync] error', err));
-    Promise.resolve().then(() => pullFromCloud({ force: true })).then(() => console.info('[debt][pull] ok')).catch(() => {});
+    Promise.resolve().then(() => syncToCloud({ modules: ['operations'] })).then(() => console.info('[debt][sync] ok')).catch((err) => console.error('[debt][sync] error', err));
+    Promise.resolve().then(() => pullFromCloud({ force: true, modules: ['operations'] })).then(() => console.info('[debt][pull] ok')).catch(() => {});
     overlay.remove();
   });
 }
@@ -3964,36 +4144,7 @@ function sanitizeCloudPayload(payload) {
 }
 
 function snapshotPayload() {
-  return {
-    products: state.products,
-    sales: state.sales,
-    deletedSales: state.deletedSales,
-    cashClosings: state.cashClosings,
-    cashSession: state.cashSession,
-    users: state.users,
-    settings: state.settings,
-    categories: state.categories,
-    subcategories: state.subcategories || {},
-    people: state.people,
-    stockConfig: state.stockConfig,
-    outflows: state.outflows,
-    debtPayments: state.debtPayments,
-    components: state.components,
-    componentLinks: state.componentLinks,
-    componentMoves: state.componentMoves,
-    cashBoxes: state.cashBoxes,
-    activeCashBoxId: state.activeCashBoxId || '',
-    systemStatus: state.systemStatus || 'CAJA_CERRADA',
-    forceLogoutAt: Number(state.forceLogoutAt || 0),
-    userSalesModes: state.userSalesModes || {},
-    touchUiConfigByUser: state.touchUiConfigByUser || {},
-    categoryImages: state.categoryImages || {},
-    orderCounters: state.orderCounters || {},
-    deletedRecordIds: state.deletedRecordIds || { cashClosings: [], sales: [] },
-    generalCash: state.generalCash || { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 },
-    generalClosings: state.generalClosings || [],
-    updatedAt: Date.now()
-  };
+  return cloudModulePayloadFromState();
 }
 
 
@@ -4102,68 +4253,66 @@ function mergeCashBoxes(remoteBoxes = [], localBoxes = []) {
 async function syncToCloud(options = {}) {
   if (!state.settings.firebaseDbUrl) return;
   await ensureCloudSeedData();
-  console.info('[cloud][sync] inicio');
+  console.info('[cloud][sync] inicio modular');
   const makeSyncError = (code, stage, status, message, extra = {}) => Object.assign(new Error(message), { code, stage, status, ...extra });
   const token = normalizedFirebaseToken();
   const authModes = token ? [true, false] : [false];
   let lastError = null;
+  const modules = Array.isArray(options.modules) && options.modules.length
+    ? options.modules
+    : ['config', 'catalog', 'operations', 'warehouse'];
+  const includeHistory = Boolean(options.includeHistory);
+  if (includeHistory && !modules.includes('history')) modules.push('history');
 
   for (const includeToken of authModes) {
     const modeLabel = includeToken ? 'token' : 'sin-token';
-    const url = buildCloudRootUrl({ includeToken });
-    if (!url) continue;
     try {
-      const remoteResp = await fetch(url);
-      if (!remoteResp.ok) {
-        const err = makeSyncError('RTDB_HTTP_GET', 'get', remoteResp.status, `[sync][rtdb] GET fallo (${remoteResp.status}) usando ${modeLabel}.`, { modeLabel });
-        if (includeToken && (remoteResp.status === 401 || remoteResp.status === 403)) {
-          console.warn('[sync][token] GET rechazado con token. Reintentando sin token.', { status: remoteResp.status });
-          lastError = err;
-          continue;
+      const localModules = snapshotPayload();
+      for (const moduleName of modules) {
+        const path = CLOUD_MODULE_PATHS[moduleName];
+        if (!path) continue;
+        let remoteModule = {};
+        try {
+          remoteModule = await cloudReadPath(path, { includeToken }) || {};
+        } catch (err) {
+          if (includeToken && [401, 403].includes(Number(err?.status || 0))) throw err;
+          remoteModule = {};
         }
-        throw err;
-      }
-      let remoteData = null;
-      try { remoteData = await remoteResp.json(); } catch { remoteData = null; }
-      const remoteUpdatedAt = Number(remoteData?.updatedAt || 0);
-      const rawPayload = snapshotPayload();
-      const payload = sanitizeCloudPayload(rawPayload);
-      console.info('[users][sync]', { usersCount: payload.users?.length || 0 });
-      console.info('[settings][sync]', { title1: payload.settings?.title1 || '', hasLogo: Boolean(payload.settings?.logoDataUrl) });
-      console.info('[settings][logo-sync]', { hasLogo: Boolean(payload.settings?.logoDataUrl), logoLength: String(payload.settings?.logoDataUrl || '').length });
-      console.info('[sale][sync]', { salesCount: payload.sales?.length || 0, activeCashBoxId: payload.activeCashBoxId || '' });
-      console.info('[cloud][payload-size]', { bytes: JSON.stringify(payload).length });
-      const mergedDeleted = mergeDeletedRecordIds(remoteData?.deletedRecordIds, payload.deletedRecordIds);
-      payload.deletedRecordIds = mergedDeleted;
-      payload.sales = mergeByIdLatest(remoteData?.sales, payload.sales, mergedDeleted.sales);
-      payload.cashClosings = mergeByIdPreferRemote(remoteData?.cashClosings, payload.cashClosings, mergedDeleted.cashClosings);
-      payload.deletedSales = mergeByIdPreferRemote(remoteData?.deletedSales, payload.deletedSales);
-      payload.outflows = mergeByIdLatest(remoteData?.outflows, payload.outflows);
-      payload.debtPayments = mergeByIdLatest(remoteData?.debtPayments, payload.debtPayments);
-      payload.cashBoxes = mergeCashBoxes(remoteData?.cashBoxes, payload.cashBoxes);
-      if (!payload.activeCashBoxId && remoteData?.activeCashBoxId) payload.activeCashBoxId = remoteData.activeCashBoxId;
-      if (payload.systemStatus === 'CAJA_CERRADA' && remoteData?.systemStatus === 'CAJA_ABIERTA' && payload.activeCashBoxId === remoteData.activeCashBoxId) {
-        payload.systemStatus = remoteData.systemStatus;
-        payload.cashSession = remoteData.cashSession || payload.cashSession;
-      }
-      if (remoteUpdatedAt && Number(payload.updatedAt || 0) <= remoteUpdatedAt) payload.updatedAt = remoteUpdatedAt + 1;
-
-      const putResp = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!putResp.ok) {
-        const err = makeSyncError('RTDB_HTTP_PUT', 'put', putResp.status, `[sync][rtdb] PUT fallo (${putResp.status}) usando ${modeLabel}.`, { modeLabel });
-        if (includeToken && (putResp.status === 401 || putResp.status === 403)) {
-          console.warn('[sync][token] PUT rechazado con token. Reintentando sin token.', { status: putResp.status });
-          lastError = err;
-          continue;
+        const localModule = localModules[moduleName] || {};
+        let payload = { ...localModule };
+        if (moduleName === 'catalog') {
+          const mergedProducts = mergeByIdLatest(remoteModule?.products, localModule?.products);
+          payload.products = collectionToObjectById(mergedProducts);
+        } else if (moduleName === 'operations') {
+          const mergedSales = mergeByIdLatest(remoteModule?.sales, localModule?.sales);
+          const mergedOutflows = mergeByIdLatest(remoteModule?.outflows, localModule?.outflows);
+          const mergedDebt = mergeByIdLatest(remoteModule?.debtPayments, localModule?.debtPayments);
+          const mergedCashBoxes = mergeCashBoxes(remoteModule?.cashBoxes, localModule?.cashBoxes);
+          payload.sales = collectionToObjectById(mergedSales);
+          payload.outflows = collectionToObjectById(mergedOutflows);
+          payload.debtPayments = collectionToObjectById(mergedDebt);
+          payload.cashBoxes = collectionToObjectById(mergedCashBoxes);
+        } else if (moduleName === 'warehouse') {
+          const mergedComponents = mergeByIdLatest(remoteModule?.components, localModule?.components);
+          payload.components = collectionToObjectById(mergedComponents);
+          payload.componentLinks = { ...(remoteModule?.componentLinks || {}), ...(localModule?.componentLinks || {}) };
+        } else if (moduleName === 'history') {
+          const mergedDeleted = mergeDeletedRecordIds(remoteModule?.deletedRecordIds, localModule?.deletedRecordIds);
+          payload.deletedRecordIds = mergedDeleted;
+          payload.cashClosings = collectionToObjectById(mergeByIdPreferRemote(remoteModule?.cashClosings, localModule?.cashClosings, mergedDeleted.cashClosings));
+          payload.deletedSales = collectionToObjectById(mergeByIdPreferRemote(remoteModule?.deletedSales, localModule?.deletedSales));
+          payload.componentMoves = collectionToObjectById(mergeByIdPreferRemote(remoteModule?.componentMoves, localModule?.componentMoves));
+        } else if (moduleName === 'config') {
+          payload = sanitizeCloudPayload(payload);
         }
-        throw err;
+        payload.updatedAt = Math.max(Number(payload.updatedAt || 0), Number(remoteModule?.updatedAt || 0), Date.now());
+        await cloudWritePath(path, payload, { includeToken, method: 'PUT' });
       }
-      state.lastSyncAt = Number(payload.updatedAt || Date.now());
+      state.lastSyncAt = Date.now();
       saveLocalState();
-      console.info('[settings][firebase] settings escritos en payload compartido', { title1: payload.settings?.title1 || '', hasLogo: Boolean(payload.settings?.logoDataUrl) });
       if (syncStatus) syncStatus.textContent = 'Sincronización enviada.';
       if (token && !includeToken) console.info('[sync][token] Sincronización exitosa ignorando token (token innecesario o inválido).');
-      console.info('[cloud][sync] fin', { updatedAt: payload.updatedAt });
+      console.info('[cloud][sync] fin modular', { modules });
       return;
     } catch (err) {
       lastError = err;
@@ -4185,48 +4334,49 @@ async function syncToCloud(options = {}) {
 async function pullFromCloud(options = {}) {
   if (!state.settings.firebaseDbUrl) return;
   await ensureCloudSeedData();
-  console.info('[cloud][pull] inicio', { force: Boolean(options.force) });
+  console.info('[cloud][pull] inicio', { force: Boolean(options.force), modules: options.modules || 'default' });
   const now = Date.now();
   if (!options.force && (now - lastCloudPullAt) < CLOUD_PULL_MIN_INTERVAL_MS) return;
   if (cloudPullInFlight) return cloudPullInFlight;
   cloudPullInFlight = (async () => {
   try {
     lastCloudPullAt = Date.now();
+    const modules = Array.isArray(options.modules) && options.modules.length
+      ? options.modules
+      : ['config', 'catalog', 'operations', 'warehouse'];
+    if (Boolean(options.includeHistory) && !modules.includes('history')) modules.push('history');
     const token = normalizedFirebaseToken();
-    const rootUrls = token
-      ? [buildCloudRootUrl({ includeToken: true }), buildCloudRootUrl({ includeToken: false })].filter(Boolean)
-      : [buildCloudRootUrl({ includeToken: false })].filter(Boolean);
-    let data = null;
-    let rootUrlUsed = '';
-    for (const rootUrl of rootUrls) {
-      rootUrlUsed = rootUrl;
-      if (!options.force) {
-        const stampResp = await fetch(rootUrl.replace(/\.json(\?.*)?$/, '/updatedAt.json$1'));
-        if (!stampResp.ok) {
-          if (token && rootUrl.includes('?auth=') && [401, 403].includes(stampResp.status)) continue;
-          throw new Error(`[pull] updatedAt no disponible (${stampResp.status})`);
+    const authModes = token ? [true, false] : [false];
+    let modulesData = null;
+    for (const includeToken of authModes) {
+      try {
+        const next = {};
+        let changedAny = false;
+        for (const moduleName of modules) {
+          const path = CLOUD_MODULE_PATHS[moduleName];
+          if (!path) continue;
+          if (!options.force) {
+            const stamp = Number(await cloudReadPath(`${path}/updatedAt`, { includeToken }) || 0);
+            if (stamp && stamp <= Number(state.lastSyncAt || 0)) continue;
+          }
+          next[moduleName] = await cloudReadPath(path, { includeToken }) || {};
+          changedAny = true;
         }
-        const remoteStamp = Number(await stampResp.json() || 0);
-        if (!remoteStamp || remoteStamp <= Number(state.lastSyncAt || 0)) return;
+        if (!changedAny && !options.force) return;
+        modulesData = next;
+        break;
+      } catch (err) {
+        if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+        throw err;
       }
-      const r = await fetch(rootUrl);
-      if (!r.ok) {
-        if (token && rootUrl.includes('?auth=') && [401, 403].includes(r.status)) continue;
-        throw new Error(`[pull] root no disponible (${r.status})`);
-      }
-    const dataRaw = await r.json();
-    data = normalizeCloudSeedObject(dataRaw);
-    console.info('[cloud][payload-size]', { bytes: JSON.stringify(dataRaw || {}).length, source: 'pull' });
-    break;
     }
-    if (!data) throw new Error('[pull] No fue posible leer RTDB con token ni sin token.');
-    if (!options.force && data.updatedAt <= state.lastSyncAt) {
-      return;
-    }
-    applyCloudData(data);
-    console.info('[sale][pull]', { salesCount: Array.isArray(data.sales) ? data.sales.length : -1, activeCashBoxId: data.activeCashBoxId || '' });
-    console.info('[cloud][pull] fin', { updatedAt: data.updatedAt, rootUrlUsed });
-    console.info('[cloud] estado sincronizado', { activeCashBoxId: state.activeCashBoxId, systemStatus: state.systemStatus, rootUrlUsed });
+    if (!modulesData) throw new Error('[pull] No fue posible leer RTDB con token ni sin token.');
+    const currentModules = cloudModulePayloadFromState();
+    const mergedModules = { ...currentModules, ...modulesData };
+    applyCloudData(mergedModules);
+    console.info('[sale][pull]', { salesCount: Array.isArray(state.sales) ? state.sales.length : -1, activeCashBoxId: state.activeCashBoxId || '' });
+    console.info('[cloud][pull] fin', { updatedAt: state.lastSyncAt, modules });
+    console.info('[cloud] estado sincronizado', { activeCashBoxId: state.activeCashBoxId, systemStatus: state.systemStatus, modules });
     const currentRoute = normalizeRoute(window.location.hash || '#home');
     const inSettingsBranch = currentRoute === 'settings' || currentRoute.startsWith('settings/');
     const inPosBranch = currentRoute.startsWith('pos/') || currentRoute === 'cash/closings';
@@ -4337,7 +4487,10 @@ function switchToPos(tabId = 'ventas') {
   posScreen?.classList.remove('hidden');
   tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === tabId));
   panels.forEach((p) => p.classList.toggle('active', p.id === tabId));
-  if (tabId === 'cierres') renderCashClosings();
+  if (tabId === 'cierres') {
+    Promise.resolve().then(() => pullFromCloud({ modules: ['history'], force: true, includeHistory: true })).catch(() => {});
+    renderCashClosings();
+  }
 }
 
 async function handleLogin() {
@@ -4662,14 +4815,14 @@ async function registerSale() {
   try {
     console.info('[sale][before-commit]', { saleId: sale.id, orderNumber: sale.orderNumber, cashBoxId: sale.cashBoxId, activeCashBoxId: state.activeCashBoxId || '', user: sale.user, payment: sale.payment, total: sale.total, inStateSales: state.sales.some((x) => x.id === sale.id) });
     await commitSaleToFirebaseTransaction(sale);
-    await pullFromCloud({ force: true });
+    await pullFromCloud({ force: true, modules: ['operations', 'catalog'] });
     const inState = (state.sales || []).some((x) => x.id === sale.id);
     const inHistory = salesForActiveCashBox().some((x) => x.id === sale.id);
     const totals = saleTotals();
     console.info('[sale][success-gate]', { saleId: sale.id, inState, inHistory, totalAfterPull: totals.final, activeCashBoxId: state.activeCashBoxId || '' });
     if (!inState || !inHistory) throw new Error('sale success-gate failed');
     confirmed = true;
-    Promise.resolve().then(() => syncToCloud({ attempt: 0 })).catch((err) => console.warn('[sale][sync] post-confirm full sync warning', err));
+    Promise.resolve().then(() => syncToCloud({ modules: ['operations', 'catalog'] })).catch((err) => console.warn('[sale][sync] post-confirm sync warning', err));
   } catch (err) {
     if (String(err?.code || '').startsWith('RTDB_HTTP_')) console.error('[sale][sync][rtdb] fallo al confirmar venta en RTDB', { error: err, context: saleDebugContext({ saleId: sale.id }) });
     else console.error('[sale][sync] fallo al confirmar venta en RTDB', { error: err, context: saleDebugContext({ saleId: sale.id }) });
@@ -5433,7 +5586,7 @@ function wireEvents() {
     renderBillingPreview();
   });
   openDatabaseConfigBtn?.classList.add('hidden');
-  syncNowBtn?.addEventListener('click', async () => { try { await syncToCloud(); if (syncStatus) syncStatus.textContent = 'Sincronizado con Firebase.'; } catch {} });
+  syncNowBtn?.addEventListener('click', async () => { try { await syncToCloud({ includeHistory: true, modules: ['config', 'catalog', 'operations', 'warehouse', 'history'] }); if (syncStatus) syncStatus.textContent = 'Sincronizado con Firebase.'; } catch {} });
   backFromMainConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   backFromUsersConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   backFromDatabaseConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
@@ -6039,17 +6192,17 @@ async function bootstrap() {
   renderSummary();
   renderSoldProductsList();
   const validSession = Boolean(state.currentUser && currentUserRecord());
-  window.addEventListener('storage', (e) => { if (!e.key || !e.key.startsWith('cafeteria_')) return; pullFromCloud({ force: true }); });
+  window.addEventListener('storage', (e) => { if (!e.key || !e.key.startsWith('cafeteria_')) return; pullFromCloud({ force: true, modules: ['operations', 'catalog'] }); });
   window.addEventListener('hashchange', () => { if (applyingRoute) return; applyRoute(); });
-  setInterval(() => { if (document.hidden) return; pullFromCloud(); }, CLOUD_POLL_INTERVAL_MS);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) pullFromCloud({ force: true }); });
-  window.addEventListener('online', () => { pullFromCloud({ force: true }); startFirebaseRealtimeListener(); });
+  setInterval(() => { if (document.hidden || firebaseRealtimeListener) return; pullFromCloud({ modules: ['operations', 'catalog'] }); }, Math.max(CLOUD_POLL_INTERVAL_MS, 20000));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pullFromCloud({ force: true, modules: ['operations', 'catalog'] }); });
+  window.addEventListener('online', () => { pullFromCloud({ force: true, modules: ['operations', 'catalog'] }); startFirebaseRealtimeListener(); });
   Promise.resolve().then(() => migrateCategoryImageRefsToDataUrls()).catch(() => {});
   if (!cloudBootHydrated) {
     if (state.currentUser && validSession) {
-      try { await pullFromCloud({ force: true }); } catch {}
+      try { await pullFromCloud({ force: true, modules: ['config', 'catalog', 'operations', 'warehouse'] }); } catch {}
     } else {
-      Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
+      Promise.resolve().then(() => pullFromCloud({ force: true, modules: ['config', 'catalog', 'operations', 'warehouse'] })).catch(() => {});
     }
   }
   cloudHydrated = cloudHydrated || cloudBootHydrated;
