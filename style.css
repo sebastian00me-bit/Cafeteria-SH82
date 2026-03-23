@@ -66,3 +66,9 @@ body.with-top-navigation main,body.with-top-navigation #stockScreen{padding-top:
 .billing-main strong{font-size:.95rem;}
 .billing-actions{display:grid;align-content:start;gap:.45rem;min-width:170px;}
 @media (max-width:760px){.billing-row{grid-template-columns:1fr;}.billing-actions{min-width:0;}}
+
+
+.products-category-divider td{background:#eef7f3;font-weight:700;color:var(--accent-dark);border-bottom:1px solid #cfe5da;}
+.products-category-divider:hover td{background:#eef7f3;}
+.category-actions{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;}
+.category-actions button{min-width:42px;}
