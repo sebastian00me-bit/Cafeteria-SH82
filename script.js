@@ -1402,13 +1402,84 @@ function persist(options = {}) {
   scheduleCloudSync(document.hidden ? 1200 : 600);
 }
 
-async function syncCriticalCashState(reason = 'cash-mutation') {
-  if (!cloudHydrated && !isModuleHydrated('operations')) {
-    console.warn('[cash][sync] operación bloqueada hasta hidratar operations', { reason });
-    await pullFromCloud({ force: true, modules: ['operations'], reason: `${reason}-rehydrate` });
+function cashStatePayloadFromState() {
+  return {
+    cashBoxes: collectionToObjectById(state.cashBoxes || []),
+    activeCashBoxId: state.activeCashBoxId || '',
+    systemStatus: state.systemStatus || 'CAJA_CERRADA',
+    cashSession: state.cashSession || null,
+    generalCash: state.generalCash || { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 },
+    generalClosings: state.generalClosings || [],
+    cashStateVersion: Number(state.cashStateVersion || 0),
+    cashStateUpdatedAt: Number(state.cashStateUpdatedAt || 0),
+    updatedAt: Date.now()
+  };
+}
+
+function applyCashStateSnapshot(snapshot = {}) {
+  state.cashBoxes = normalizeCollectionToArray(snapshot.cashBoxes);
+  state.activeCashBoxId = String(snapshot.activeCashBoxId || '');
+  state.systemStatus = snapshot.systemStatus || 'CAJA_CERRADA';
+  state.cashSession = snapshot.cashSession || null;
+  state.generalCash = (snapshot.generalCash && typeof snapshot.generalCash === 'object')
+    ? { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0, ...snapshot.generalCash }
+    : { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 };
+  state.generalClosings = Array.isArray(snapshot.generalClosings) ? snapshot.generalClosings : [];
+  state.cashStateVersion = Number(snapshot.cashStateVersion || state.cashStateVersion || 0);
+  state.cashStateUpdatedAt = Number(snapshot.cashStateUpdatedAt || state.cashStateUpdatedAt || 0);
+  normalizeCashState();
+  saveLocalState();
+}
+
+async function pullCashStateFromCloud(reason = 'cash-pull') {
+  if (!state.settings.firebaseDbUrl) return null;
+  await ensureCloudSeedData();
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  for (const includeToken of authModes) {
+    try {
+      const operations = await cloudReadPath('operations', { includeToken }) || {};
+      const snapshot = {
+        cashBoxes: operations.cashBoxes || {},
+        activeCashBoxId: operations.activeCashBoxId || '',
+        systemStatus: operations.systemStatus || 'CAJA_CERRADA',
+        cashSession: operations.cashSession || null,
+        generalCash: operations.generalCash || null,
+        generalClosings: operations.generalClosings || [],
+        cashStateVersion: Number(operations.cashStateVersion || 0),
+        cashStateUpdatedAt: Number(operations.cashStateUpdatedAt || 0)
+      };
+      applyCashStateSnapshot(snapshot);
+      markModuleHydrated('operations', true, { source: reason });
+      return snapshot;
+    } catch (err) {
+      if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+      throw err;
+    }
   }
-  await syncToCloud({ modules: ['operations'], reason });
-  await pullFromCloud({ force: true, modules: ['operations'], reason: `${reason}-verify` });
+  return null;
+}
+
+async function syncCashStateToCloud(reason = 'cash-sync') {
+  if (!state.settings.firebaseDbUrl) return;
+  await ensureCloudSeedData();
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  const payload = cashStatePayloadFromState();
+  for (const includeToken of authModes) {
+    try {
+      await cloudWritePath('operations', payload, { includeToken, method: 'PATCH' });
+      recordModuleWrite('operations', payload, reason);
+      markModuleHydrated('operations', true, { source: reason });
+      state.lastSyncAt = Math.max(Number(state.lastSyncAt || 0), Number(payload.updatedAt || 0));
+      saveLocalState();
+      return payload;
+    } catch (err) {
+      if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+      throw err;
+    }
+  }
+  return payload;
 }
 
 function defaultPermissions() {
@@ -1464,8 +1535,13 @@ function getActiveCashBox() {
     const box = getCashBoxById(state.activeCashBoxId);
     if (box && box.estado === 'ABIERTA') return box;
   }
-  const fallback = (state.cashBoxes || []).find((box) => box.estado === 'ABIERTA') || null;
-  if (fallback) state.activeCashBoxId = fallback.id;
+  const fallback = [...(state.cashBoxes || [])]
+    .filter((box) => box?.estado === 'ABIERTA')
+    .sort((a, b) => cashBoxTimelineValue(b) - cashBoxTimelineValue(a))[0] || null;
+  if (fallback) {
+    state.activeCashBoxId = fallback.id;
+    state.systemStatus = 'CAJA_ABIERTA';
+  }
   return fallback;
 }
 
@@ -1565,8 +1641,8 @@ function normalizeCashState() {
   if (!Array.isArray(state.cashBoxes)) state.cashBoxes = [];
   const openBoxes = state.cashBoxes.filter((box) => box.estado === 'ABIERTA');
   if (openBoxes.length > 1) {
-    const keep = openBoxes[0];
-    state.cashBoxes = state.cashBoxes.map((box, idx) => (idx > 0 && box.estado === 'ABIERTA' ? { ...box, estado: 'CERRADA', fecha_cierre: box.fecha_cierre || new Date().toISOString() } : box));
+    const keep = [...openBoxes].sort((a, b) => cashBoxTimelineValue(b) - cashBoxTimelineValue(a))[0];
+    state.cashBoxes = state.cashBoxes.map((box) => (box.estado === 'ABIERTA' && box.id !== keep.id ? { ...box, estado: 'CERRADA', fecha_cierre: box.fecha_cierre || new Date().toISOString() } : box));
     state.activeCashBoxId = keep.id;
   }
   const activeCash = getActiveCashBox();
@@ -1581,8 +1657,8 @@ function normalizeCashState() {
       state.cashSession = { id: activeCash.id, openedAt: activeCash.fecha_apertura, openingCash: Number(activeCash.openingCash || 0), orderCounter: 1 };
     }
   }
-  state.cashStateVersion = Math.max(Number(state.cashStateVersion || 0), Number(state.cashStateUpdatedAt || 0), Number(state.generalCash?.updatedAt || 0), Date.now());
-  state.cashStateUpdatedAt = Math.max(Number(state.cashStateUpdatedAt || 0), Number(state.cashStateVersion || 0));
+  state.cashStateVersion = Math.max(Number(state.cashStateVersion || 0), Number(state.cashStateUpdatedAt || 0), Number(state.generalCash?.updatedAt || 0), 0);
+  state.cashStateUpdatedAt = Math.max(Number(state.cashStateUpdatedAt || 0), Number(state.generalCash?.updatedAt || 0), 0);
 }
 
 function bumpCashStateVersion(reason = 'cash-state') {
@@ -4414,20 +4490,24 @@ function cashStateVersionOf(source = {}) {
 function mergeCashOperationsState(remoteModule = {}, localModule = {}) {
   const remoteVersion = cashStateVersionOf(remoteModule);
   const localVersion = cashStateVersionOf(localModule);
-  const winner = remoteVersion >= localVersion ? remoteModule : localModule;
+  const winner = localVersion > remoteVersion ? localModule : remoteModule;
   const loser = winner === remoteModule ? localModule : remoteModule;
   const mergedCashBoxes = mergeCashBoxes(remoteModule?.cashBoxes, localModule?.cashBoxes);
-  const activeCandidate = String(winner?.activeCashBoxId || '');
-  const activeExists = normalizeCollectionToArray(mergedCashBoxes).some((box) => box?.id === activeCandidate && box?.estado === 'ABIERTA');
+  let activeCandidate = String(winner?.activeCashBoxId || '');
+  const openBoxes = normalizeCollectionToArray(mergedCashBoxes).filter((box) => box?.estado === 'ABIERTA');
+  const activeExists = openBoxes.some((box) => box?.id === activeCandidate);
+  if (!activeExists && openBoxes.length) {
+    activeCandidate = [...openBoxes].sort((a, b) => cashBoxTimelineValue(b) - cashBoxTimelineValue(a))[0]?.id || '';
+  }
   return {
     cashBoxes: collectionToObjectById(mergedCashBoxes),
-    activeCashBoxId: activeExists ? activeCandidate : '',
-    systemStatus: activeExists ? 'CAJA_ABIERTA' : 'CAJA_CERRADA',
+    activeCashBoxId: activeCandidate || '',
+    systemStatus: activeCandidate ? 'CAJA_ABIERTA' : 'CAJA_CERRADA',
     cashSession: winner?.cashSession || loser?.cashSession || null,
     generalCash: winner?.generalCash || loser?.generalCash || localModule?.generalCash || remoteModule?.generalCash || null,
     generalClosings: Array.isArray(winner?.generalClosings) ? winner.generalClosings : (Array.isArray(loser?.generalClosings) ? loser.generalClosings : []),
-    cashStateVersion: Math.max(remoteVersion, localVersion, Date.now()),
-    cashStateUpdatedAt: Math.max(Number(winner?.cashStateUpdatedAt || 0), Number(loser?.cashStateUpdatedAt || 0), Date.now())
+    cashStateVersion: Math.max(remoteVersion, localVersion, 0),
+    cashStateUpdatedAt: Math.max(Number(winner?.cashStateUpdatedAt || 0), Number(loser?.cashStateUpdatedAt || 0), 0)
   };
 }
 
@@ -4786,13 +4866,9 @@ async function startCashSession(openingAmount = 0) {
     return setMsg(homeMessage, 'Monto inicial inválido.', false);
   }
 
-  if (!isModuleHydrated('operations')) {
-    try {
-      await pullFromCloud({ force: true, modules: ['operations'], reason: 'open-cash-preflight' });
-    } catch {}
-  }
+  try { await pullCashStateFromCloud('open-cash-preflight'); } catch {}
   if (getActiveCashBox()) {
-    return setMsg(homeMessage, 'Otra caja ya fue abierta desde otro cliente.', false);
+    return setMsg(homeMessage, 'Ya existe una caja abierta.', false);
   }
   const nowIso = new Date().toISOString();
   const cashBox = {
@@ -4834,18 +4910,10 @@ async function startCashSession(openingAmount = 0) {
   renderSalesHistory();
   renderDebtors();
   renderOutflows();
-  try {
-    await syncCriticalCashState('open-cash');
-    console.info('[cash] caja abierta correctamente', { cashBoxId: cashBox.id });
-    setMsg(homeMessage, 'Caja abierta correctamente.');
-    switchToPos('ventas');
-  } catch (err) {
-    console.error('[cash] apertura revertida por inconsistencia remota', err);
-    await pullFromCloud({ force: true, modules: ['operations'], reason: 'open-cash-rollback' });
-    renderHomeActions();
-    renderCashStatus();
-    return setMsg(homeMessage, 'No se pudo abrir caja de forma consistente. Intenta nuevamente.', false);
-  }
+  console.info('[cash] caja abierta correctamente', { cashBoxId: cashBox.id });
+  setMsg(homeMessage, 'Caja abierta correctamente.');
+  switchToPos('ventas');
+  Promise.resolve(syncCashStateToCloud('open-cash')).catch((err) => console.error('[cash] open sync failed', err));
 }
 
 async function closeCashSession() {
@@ -4856,15 +4924,16 @@ async function closeCashSession() {
   try {
     const activeCash = getActiveCashBox();
     if (!activeCash) return setMsg(homeMessage, 'No hay caja abierta para cerrar.', false);
-    if (!isModuleHydrated('operations')) {
-      await pullFromCloud({ force: true, modules: ['operations'], reason: 'close-cash-preflight' });
-    }
+    try { await pullCashStateFromCloud('close-cash-preflight'); } catch {}
+    const refreshedActiveCash = getActiveCashBox();
+    if (!refreshedActiveCash) return setMsg(homeMessage, 'No hay caja abierta para cerrar.', false);
     if (!confirm('¿Estás seguro que deseas cerrar caja?')) return;
 
-    const daySales = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt);
-    const dayOutflows = (state.outflows || []).filter((move) => move.cashBoxId === state.activeCashBoxId);
-    const dayDebtPayments = activeDebtPayments().filter((pay) => pay.cashBoxId === state.activeCashBoxId);
-    const dayDeletedSales = (state.deletedSales || []).filter((sale) => sale.cashBoxId === state.activeCashBoxId);
+    const currentCashBoxId = refreshedActiveCash.id;
+    const daySales = (state.sales || []).filter((sale) => sale.cashBoxId === currentCashBoxId && !sale.carryOverDebt);
+    const dayOutflows = (state.outflows || []).filter((move) => move.cashBoxId === currentCashBoxId);
+    const dayDebtPayments = activeDebtPayments().filter((pay) => pay.cashBoxId === currentCashBoxId);
+    const dayDeletedSales = (state.deletedSales || []).filter((sale) => sale.cashBoxId === currentCashBoxId);
 
     const totalsByMethod = daySales.reduce((acc, sale) => {
       const method = sale.payment || 'desconocido';
@@ -4876,26 +4945,26 @@ async function closeCashSession() {
     const qrIn = daySales.reduce((sum, sale) => sum + Number(sale.breakdown?.qr || 0), 0);
     const debtPendingTotal = daySales.reduce((sum, sale) => sum + Number(sale.debtAmount || 0), 0);
 
-    activeCash.estado = 'CERRADA';
-    activeCash.fecha_cierre = new Date().toISOString();
-    activeCash.resumen = {
+    refreshedActiveCash.estado = 'CERRADA';
+    refreshedActiveCash.fecha_cierre = new Date().toISOString();
+    refreshedActiveCash.resumen = {
       total_ventas: daySales.reduce((sum, sale) => sum + Number(sale.total || 0), 0),
       total_transacciones: daySales.length,
       total_pedidos: daySales.length,
       total_por_metodo: totalsByMethod
     };
-    activeCash.usuario_cierre = state.currentUser?.username || '-';
+    refreshedActiveCash.usuario_cierre = state.currentUser?.username || '-';
 
     const closing = {
       id: uid(),
-      cashBoxId: activeCash.id,
-      openedAt: activeCash.fecha_apertura,
-      closedAt: activeCash.fecha_cierre,
-      openingCash: Number(activeCash.openingCash || 0),
+      cashBoxId: refreshedActiveCash.id,
+      openedAt: refreshedActiveCash.fecha_apertura,
+      closedAt: refreshedActiveCash.fecha_cierre,
+      openingCash: Number(refreshedActiveCash.openingCash || 0),
       cashIn,
       qrIn,
       debtPending: debtPendingTotal,
-      finalCashInBox: Number(activeCash.openingCash || 0) + cashIn,
+      finalCashInBox: Number(refreshedActiveCash.openingCash || 0) + cashIn,
       salesCount: daySales.length,
       salesIds: daySales.map((sale) => sale.id),
       salesSnapshot: daySales.map((sale) => ({ ...sale })),
@@ -4912,7 +4981,7 @@ async function closeCashSession() {
     state.generalCash = {
       ...(state.generalCash || {}),
       estado: 'CERRADA',
-      closedAt: activeCash.fecha_cierre,
+      closedAt: refreshedActiveCash.fecha_cierre,
       closedBy: state.currentUser?.username || '-',
       updatedAt: bumpCashStateVersion('close-cash')
     };
@@ -4924,16 +4993,15 @@ async function closeCashSession() {
     refreshFinancialViews();
     if (cashCloseResult) {
       cashCloseResult.className = 'ok';
-      cashCloseResult.textContent = `Cierre digital realizado: Ventas ${money(activeCash.resumen.total_ventas)} · Transacciones ${activeCash.resumen.total_transacciones}.`;
+      cashCloseResult.textContent = `Cierre digital realizado: Ventas ${money(refreshedActiveCash.resumen.total_ventas)} · Transacciones ${refreshedActiveCash.resumen.total_transacciones}.`;
     }
     switchToPos('ventas');
     showHome();
-    await syncCriticalCashState('close-cash');
     setMsg(homeMessage, 'La caja ha sido cerrada.', false);
+    Promise.resolve(syncCashStateToCloud('close-cash')).catch((err) => console.error('[cash] close sync failed', err));
   } catch (err) {
     console.error('[cash] closeCashSession error', err);
-    try { await pullFromCloud({ force: true, modules: ['operations'], reason: 'close-cash-recover' }); } catch {}
-    setMsg(homeMessage, 'No se pudo cerrar caja. Intenta nuevamente.', false);
+    setMsg(homeMessage, 'No se pudo cerrar caja.', false);
   }
 }
 
