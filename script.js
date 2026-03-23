@@ -1773,7 +1773,7 @@ function renderCart() {
 
 function renderSaleSelectors() {
   if (!saleCategoryButtons || !saleCategorySelectors) return;
-  const cats = [...new Set(state.products.filter((p) => !p.hidden).map((p) => p.category))];
+  const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   if (!cats.length) {
     saleCategoryButtons.innerHTML = '<p>Sin categorías.</p>';
     saleCategorySelectors.innerHTML = '';
@@ -1915,7 +1915,7 @@ function renderTouchSaleUi() {
   }
   const cfg = getTouchUiConfig();
   const cap = touchGridCapacity();
-  const cats = [...new Set(state.products.filter((p) => !p.hidden).map((p) => p.category))];
+  const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   state.touchUiState = state.touchUiState || { view: 'categories', category: '', page: 0 };
   const ui = state.touchUiState;
   if (!cats.includes(ui.category)) { ui.category = ''; ui.view = 'categories'; ui.page = 0; }
@@ -2505,16 +2505,23 @@ async function downloadClosingPdf(closingId) {
     ];
     doc.autoTable({ startY: y0 + 18, head: [['Información general', 'Valor']], body: general, theme: 'grid' });
     const fy = doc.lastAutoTable.finalY + 4;
+    const debtPayments = Array.isArray(closing.debtPaymentsSnapshot) ? closing.debtPaymentsSnapshot.filter((p) => !p?.anulado) : [];
+    const debtCash = debtPayments.reduce((sum, pay) => sum + Number(pay.cashAmount || (pay.method === 'efectivo' ? pay.amount : 0) || 0), 0);
+    const debtQr = debtPayments.reduce((sum, pay) => sum + Number(pay.qrAmount || (pay.method === 'qr' ? pay.amount : 0) || 0), 0);
+    const totalCash = Number(closing.cashIn || 0) + debtCash;
+    const totalQr = Number(closing.qrIn || 0) + debtQr;
     const fin = [
       ['Monto inicial', money(agg.opening)],
-      ['Total ventas brutas', money(agg.net)],
+      ['Ventas registradas', money(Number(closing.cashIn || 0) + Number(closing.qrIn || 0))],
+      ['Pagos de deuda recibidos', money(debtCash + debtQr)],
+      ['Total ventas brutas', money(agg.net + debtCash + debtQr)],
       ['Total descuentos', money(Number(closing.discountTotal || 0))],
-      ['Total ingresos netos', money(agg.net)],
-      ['Total efectivo', money(agg.cash)],
-      ['Total QR', money(agg.qr)],
+      ['Total ingresos netos', money(agg.net + debtCash + debtQr)],
+      ['Total efectivo', money(totalCash)],
+      ['Total QR', money(totalQr)],
       ['Total salidas', money(agg.outTotal)],
       ['Total entradas', money(agg.inTotal)],
-      ['Total esperado', money(agg.expected)],
+      ['Total esperado', money(agg.expected + debtCash)],
       ['Total contado', money(agg.counted)]
     ];
     doc.autoTable({ startY: fy, head: [['Resumen financiero', 'Valor']], body: fin, theme: 'grid' });
@@ -2532,10 +2539,10 @@ async function downloadClosingPdf(closingId) {
     const py = doc.lastAutoTable.finalY + 4;
     const totalNet = Math.max(1, agg.net);
     const mpay = [
-      ['Efectivo', `${money(agg.cash)} (${((agg.cash/totalNet)*100).toFixed(1)}%)`],
-      ['Transferencia', `${money(agg.transfer)} (${((agg.transfer/totalNet)*100).toFixed(1)}%)`],
-      ['QR', `${money(agg.qr)} (${((agg.qr/totalNet)*100).toFixed(1)}%)`],
-      ['Otros', `${money(agg.others)} (${((agg.others/totalNet)*100).toFixed(1)}%)`]
+      ['Efectivo', `${money(totalCash)} (${((totalCash/Math.max(1,totalCash + totalQr + agg.transfer + agg.others))*100).toFixed(1)}%)`],
+      ['Transferencia', `${money(agg.transfer)} (${((agg.transfer/Math.max(1,totalCash + totalQr + agg.transfer + agg.others))*100).toFixed(1)}%)`],
+      ['QR', `${money(totalQr)} (${((totalQr/Math.max(1,totalCash + totalQr + agg.transfer + agg.others))*100).toFixed(1)}%)`],
+      ['Otros', `${money(agg.others)} (${((agg.others/Math.max(1,totalCash + totalQr + agg.transfer + agg.others))*100).toFixed(1)}%)`]
     ];
     doc.autoTable({ startY: py, head: [['Método', 'Monto']], body: mpay, theme: 'grid' });
     const movementRows = (closing.outflowsSnapshot || []).map((m) => [
@@ -2562,6 +2569,18 @@ async function downloadClosingPdf(closingId) {
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['DETALLE DE ENTRADAS', '', '', '', '', '']], body: entriesRows.length ? entriesRows : [['Sin entradas.', '', '', '', '', '']], theme: 'grid' });
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 3, head: [['DETALLE DE SALIDAS', '', '', '', '', '']], body: exitsRows.length ? exitsRows : [['Sin salidas.', '', '', '', '', '']], theme: 'grid' });
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 3, head: [['VENTAS POR USUARIO', '', '']], body: userSalesRows.length ? userSalesRows : [['Sin ventas por usuario.', '', '']], theme: 'grid' });
+    const debtPaymentRows = debtPayments.map((pay) => {
+      const sale = saleRecordForPayment(pay);
+      const person = state.people.find((x) => x.id === pay.debtorId);
+      return [
+        new Date(pay.paidAt || closing.closedAt).toLocaleString(),
+        personFullName(person) || '-',
+        sale?.items?.map((item) => `${item.name} x${item.qty}`).join(', ') || '-',
+        pay.method || '-',
+        money(pay.amount || 0),
+        pay.paidBy || '-'
+      ];
+    });
     const historyRows = closingSalesHistoryRows(closing).map((sale) => [
       new Date(sale.createdAt || sale.deletedAt).toLocaleString(),
       `#${orderNumberLabel(sale.orderNumber)}`,
@@ -2571,7 +2590,8 @@ async function downloadClosingPdf(closingId) {
       sale.statusLabel || sale.status || 'OK'
     ]);
     doc.addPage();
-    doc.autoTable({ startY: 12, head: [['HISTORIAL DE VENTAS DE CIERRE', '', '', '', '', '']], body: historyRows.length ? historyRows : [['Sin historial de ventas.', '', '', '', '', '']], theme: 'grid', didParseCell: (hook) => {
+    doc.autoTable({ startY: 12, head: [['PAGOS DE DEUDA', '', '', '', '', '']], body: debtPaymentRows.length ? debtPaymentRows : [['Sin pagos de deuda.', '', '', '', '', '']], theme: 'grid' });
+    doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['HISTORIAL DE VENTAS DE CIERRE', '', '', '', '', '']], body: historyRows.length ? historyRows : [['Sin historial de ventas.', '', '', '', '', '']], theme: 'grid', didParseCell: (hook) => {
       if (hook.section !== 'body') return;
       const cellText = String(hook.row?.raw?.[5] || '');
       if (cellText.includes('ANULADA')) {
@@ -2852,10 +2872,12 @@ function renderCashClosings() {
     const inCash = (c.outflowsSnapshot || []).filter((m) => m.direction === 'entrada' && m.method === 'efectivo').reduce((a,m)=>a+Number(m.amount||0),0);
     const outQr = (c.outflowsSnapshot || []).filter((m) => m.direction === 'salida' && m.method === 'qr').reduce((a,m)=>a+Number(m.amount||0),0);
     const inQr = (c.outflowsSnapshot || []).filter((m) => m.direction === 'entrada' && m.method === 'qr').reduce((a,m)=>a+Number(m.amount||0),0);
-    const finalCash = Number(c.openingCash || 0) + Number(c.cashIn || 0) - outCash + inCash;
-    const finalQr = Number(c.qrIn || 0) - outQr + inQr;
+    const debtCashIn = Number(c.debtCashIn || 0);
+    const debtQrIn = Number(c.debtQrIn || 0);
+    const finalCash = Number(c.openingCash || 0) + Number(c.cashIn || 0) + debtCashIn - outCash + inCash;
+    const finalQr = Number(c.qrIn || 0) + debtQrIn - outQr + inQr;
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${new Date(c.closedAt).toLocaleString()}</td><td>${money(c.openingCash)}</td><td>${money(c.cashIn)}</td><td>${money(c.qrIn)}</td><td>${money(c.debtPending || 0)}</td><td>${money(outCash)}</td><td>${money(inCash)}</td><td>${money(outQr)}</td><td>${money(inQr)}</td><td>${money(finalCash)}</td><td>${money(finalQr)}</td><td>${c.salesCount || 0}</td><td><button class="secondary" data-closing-id="${c.id}" type="button">Ver detalle</button> <button class="secondary" data-closing-pdf="${c.id}" type="button">PDF</button></td><td>${hasPermission('deleteClosings') ? `<button class="secondary" data-closing-del="${c.id}" type="button">Eliminar</button>` : '-'}</td>`;
+    tr.innerHTML = `<td>${new Date(c.closedAt).toLocaleString()}</td><td>${money(c.openingCash)}</td><td>${money(Number(c.cashIn || 0) + debtCashIn)}</td><td>${money(Number(c.qrIn || 0) + debtQrIn)}</td><td>${money(c.debtPending || 0)}</td><td>${money(outCash)}</td><td>${money(inCash)}</td><td>${money(outQr)}</td><td>${money(inQr)}</td><td>${money(finalCash)}</td><td>${money(finalQr)}</td><td>${c.salesCount || 0}</td><td><button class="secondary" data-closing-id="${c.id}" type="button">Ver detalle</button> <button class="secondary" data-closing-pdf="${c.id}" type="button">PDF</button></td><td>${hasPermission('deleteClosings') ? `<button class="secondary" data-closing-del="${c.id}" type="button">Eliminar</button>` : '-'}</td>`;
     tr.dataset.closingNumber = String(idx + 1);
     cashClosingsTable.appendChild(tr);
   });
@@ -2887,6 +2909,7 @@ function renderClosingDetails(closingId) {
   const debtPayments = Array.isArray(closing.debtPaymentsSnapshot) ? closing.debtPaymentsSnapshot.filter((p) => !p?.anulado) : [];
   const debtCash = debtPayments.reduce((a, p) => a + Number(p.cashAmount || (p.method === 'efectivo' ? p.amount : 0) || 0), 0);
   const debtQr = debtPayments.reduce((a, p) => a + Number(p.qrAmount || (p.method === 'qr' ? p.amount : 0) || 0), 0);
+  const debtCollected = debtCash + debtQr;
   const totalCash = Number(closing.cashIn || 0) + debtCash;
   const totalQr = Number(closing.qrIn || 0) + debtQr;
   const openingCash = Number(closing.openingCash || 0);
@@ -2900,7 +2923,7 @@ function renderClosingDetails(closingId) {
   const closingHistoryRows = closingHistory.length
     ? closingHistory.map((sale) => `<tr style="${sale.status === 'ANULADA' ? 'color:#c1121f;font-weight:700;' : ''}"><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${sale.payment || '-'}</td><td>${money(sale.total)}</td><td>${sale.user || '-'}</td><td>${sale.statusLabel || sale.status}</td></tr>`).join('')
     : '<tr><td colspan="6">Sin historial de ventas.</td></tr>';
-  if (closingSummaryText) closingSummaryText.innerHTML = `<div class="card"><h4>SECCIÓN 1 – INFORMACIÓN GENERAL</h4><p>Número de cierre: ${String(closing.id || '-').slice(-8)}</p><p>Fecha de apertura: ${openAt.toLocaleDateString()}</p><p>Hora de apertura: ${openAt.toLocaleTimeString()}</p><p>Fecha de cierre: ${closeAt.toLocaleDateString()}</p><p>Hora de cierre: ${closeAt.toLocaleTimeString()}</p><p>Usuario que abrió: ${closing.usuario_apertura || '-'}</p><p>Usuario que cerró: ${closing.usuario_cierre || '-'}</p><p>Tiempo total de caja abierta: ${formatDurationMs(closeAt - openAt)}</p></div><div class="card"><h4>Detalle para enviar</h4><p>Cambio inicial: ${money(openingCash)}</p><p>Valor efectivo de ventas: ${money(totalCash)}</p><p>Valor QR de ventas: ${money(totalQr)}</p><p>Salida efectivo: ${money(outCash)}</p><p>Entrada efectivo: ${money(inCash)}</p><p>Salida QR: ${money(outQr)}</p><p>Entrada QR: ${money(inQr)}</p><p>Valor final en caja: ${money(totalInBox)}</p><p>Valor final descontando cambio inicial: ${money(realDelivered)}</p></div><div class="card"><h4>SECCIÓN 2 – RESUMEN FINANCIERO</h4><p>Inicio de caja: ${money(openingCash)}</p><p>Total ventas brutas: ${money(grossSales)}</p><p>Total descuentos: ${money(totalDiscounts)}</p><p>Total ingresos netos: ${money(grossSales - totalDiscounts)}</p><p>Total en efectivo: ${money(totalCash)}</p><p>Total QR: ${money(totalQr)}</p><p>Total salidas externas efectivo: ${money(outCash)}</p><p>Total salidas externas QR: ${money(outQr)}</p><p>Total entradas externas efectivo: ${money(inCash)}</p><p>Total entradas externas QR: ${money(inQr)}</p><p>Total efectivo final: ${money(totalCashFinal)}</p><p>Total QR final: ${money(totalQrFinal)}</p><p>Valor total en caja (incluye valor de caja): ${money(totalInBox)}</p><p>Valor efectivo real de venta entregado: ${money(realDelivered)}</p></div><div class="card"><h4>Productos vendidos</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Total</th></tr></thead><tbody>${agg.products.length ? agg.products.map((row) => `<tr><td>${row.name}</td><td>${row.qty}</td><td>${money(row.total)}</td></tr>`).join('') : '<tr><td colspan="3">Sin productos vendidos.</td></tr>'}</tbody></table></div><div class="card"><h4>HISTORIAL DE VENTAS DE CIERRE</h4><table><thead><tr><th>Fecha</th><th>Nro pedido</th><th>Método</th><th>Total</th><th>Usuario</th><th>Estado</th></tr></thead><tbody>${closingHistoryRows}</tbody></table></div><div class="card"><h4>SECCIÓN 3 – MÉTRICAS OPERATIVAS</h4><p>Cantidad total de ventas: ${closing.salesCount || sales.length}</p><p>Total productos vendidos: ${agg.qtyTotal}</p><p>Ticket promedio: ${money(agg.avgTicket)}</p><p>Venta más alta: ${money(agg.saleMax)}</p><p>Venta más baja: ${money(agg.saleMin)}</p><p>Ventas eliminadas: ${deletedCount} · Mov. caja: ${outflowCount} · Pagos deuda: ${debtPaymentsCount}</p></div><div class="card"><h4>Detalle de entradas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${entries.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin entradas.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de salidas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${exits.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin salidas.</td></tr>'}</tbody></table></div>`;
+  if (closingSummaryText) closingSummaryText.innerHTML = `<div class="card"><h4>SECCIÓN 1 – INFORMACIÓN GENERAL</h4><p>Número de cierre: ${String(closing.id || '-').slice(-8)}</p><p>Fecha de apertura: ${openAt.toLocaleDateString()}</p><p>Hora de apertura: ${openAt.toLocaleTimeString()}</p><p>Fecha de cierre: ${closeAt.toLocaleDateString()}</p><p>Hora de cierre: ${closeAt.toLocaleTimeString()}</p><p>Usuario que abrió: ${closing.usuario_apertura || '-'}</p><p>Usuario que cerró: ${closing.usuario_cierre || '-'}</p><p>Tiempo total de caja abierta: ${formatDurationMs(closeAt - openAt)}</p></div><div class="card"><h4>Detalle para enviar</h4><p>Cambio inicial: ${money(openingCash)}</p><p>Valor efectivo de ventas: ${money(totalCash)}</p><p>Valor QR de ventas: ${money(totalQr)}</p><p>Salida efectivo: ${money(outCash)}</p><p>Entrada efectivo: ${money(inCash)}</p><p>Salida QR: ${money(outQr)}</p><p>Entrada QR: ${money(inQr)}</p><p>Valor final en caja: ${money(totalInBox)}</p><p>Valor final descontando cambio inicial: ${money(realDelivered)}</p></div><div class="card"><h4>SECCIÓN 2 – RESUMEN FINANCIERO</h4><p>Inicio de caja: ${money(openingCash)}</p><p>Total ventas brutas: ${money(grossSales)}</p><p>Pagos de deuda cobrados: ${money(debtCollected)}</p><p>Total descuentos: ${money(totalDiscounts)}</p><p>Total ingresos netos: ${money((grossSales - totalDiscounts) + debtCollected)}</p><p>Total en efectivo: ${money(totalCash)}</p><p>Total QR: ${money(totalQr)}</p><p>Total salidas externas efectivo: ${money(outCash)}</p><p>Total salidas externas QR: ${money(outQr)}</p><p>Total entradas externas efectivo: ${money(inCash)}</p><p>Total entradas externas QR: ${money(inQr)}</p><p>Total efectivo final: ${money(totalCashFinal)}</p><p>Total QR final: ${money(totalQrFinal)}</p><p>Valor total en caja (incluye valor de caja): ${money(totalInBox)}</p><p>Valor efectivo real de venta entregado: ${money(realDelivered)}</p></div><div class="card"><h4>Productos vendidos</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Total</th></tr></thead><tbody>${agg.products.length ? agg.products.map((row) => `<tr><td>${row.name}</td><td>${row.qty}</td><td>${money(row.total)}</td></tr>`).join('') : '<tr><td colspan="3">Sin productos vendidos.</td></tr>'}</tbody></table></div><div class="card"><h4>HISTORIAL DE VENTAS DE CIERRE</h4><table><thead><tr><th>Fecha</th><th>Nro pedido</th><th>Método</th><th>Total</th><th>Usuario</th><th>Estado</th></tr></thead><tbody>${closingHistoryRows}</tbody></table></div><div class="card"><h4>SECCIÓN 3 – MÉTRICAS OPERATIVAS</h4><p>Cantidad total de ventas: ${closing.salesCount || sales.length}</p><p>Total productos vendidos: ${agg.qtyTotal}</p><p>Ticket promedio: ${money(agg.avgTicket)}</p><p>Venta más alta: ${money(agg.saleMax)}</p><p>Venta más baja: ${money(agg.saleMin)}</p><p>Ventas eliminadas: ${deletedCount} · Mov. caja: ${outflowCount} · Pagos deuda: ${debtPaymentsCount}</p></div><div class="card"><h4>Pagos de deuda</h4><table><thead><tr><th>Fecha pago</th><th>Persona</th><th>Detalle compra</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${debtPayments.map((p) => { const sale = saleRecordForPayment(p); const person = state.people.find((x) => x.id === p.debtorId); return `<tr><td>${new Date(p.paidAt).toLocaleString()}</td><td>${personFullName(person) || '-'}</td><td>${sale?.items?.map((i) => `${i.name} x${i.qty}`).join(', ') || '-'}</td><td>${p.method || '-'}</td><td>${money(p.amount || 0)}</td><td>${p.paidBy || '-'}</td></tr>`; }).join('') || '<tr><td colspan="6">Sin pagos de deuda.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de entradas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${entries.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin entradas.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de salidas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${exits.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin salidas.</td></tr>'}</tbody></table></div>`;
   if (closingSalesTable) closingSalesTable.innerHTML = sales.length ? sales.map((sale) => `<tr><td>${new Date(sale.createdAt).toLocaleString()}</td><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${sale.payment}</td><td>${money(sale.total)}</td><td>${sale.user}</td></tr>`).join('') : '<tr><td colspan="5">Sin ventas.</td></tr>';
   if (closingProductsTable) {
     const aggProducts = agg.products;
@@ -3593,20 +3616,76 @@ function renderImageRetryHint(kind, key, value) {
   return `<div class="upload-error">Imagen no disponible en este navegador.</div><button class="secondary" data-img-retry-kind="${kind}" data-img-retry-key="${escapeHtml(String(key || ''))}" type="button">Reintentar</button>`;
 }
 
+function getOrderedCategories(options = {}) {
+  const includeHidden = options.includeHidden !== false;
+  const productCategories = [...new Set((state.products || [])
+    .filter((p) => includeHidden || !p.hidden)
+    .map((p) => String(p.category || '').trim())
+    .filter(Boolean))];
+  const ordered = [];
+  (state.categories || []).forEach((category) => {
+    const name = String(category || '').trim();
+    if (name && !ordered.includes(name)) ordered.push(name);
+  });
+  productCategories.forEach((category) => {
+    if (!ordered.includes(category)) ordered.push(category);
+  });
+  return ordered;
+}
+
+function moveCategory(category = '', direction = 0) {
+  const categories = getOrderedCategories({ includeHidden: true });
+  const index = categories.indexOf(category);
+  if (index < 0) return false;
+  const nextIndex = index + Number(direction || 0);
+  if (nextIndex < 0 || nextIndex >= categories.length) return false;
+  const swapped = categories[index];
+  categories[index] = categories[nextIndex];
+  categories[nextIndex] = swapped;
+  state.categories = categories;
+  return true;
+}
+
 function renderProducts() {
   const selectedCategory = productCategory?.value || '';
-  const sorted = state.products.slice().sort((a, b) => Number(Boolean(a.hidden)) - Number(Boolean(b.hidden)));
+  const orderedCategories = getOrderedCategories({ includeHidden: true });
+  const categoryOrder = new Map(orderedCategories.map((category, index) => [category, index]));
+  const sorted = state.products.slice().sort((a, b) => {
+    const catDiff = (categoryOrder.get(a.category || '') ?? Number.MAX_SAFE_INTEGER) - (categoryOrder.get(b.category || '') ?? Number.MAX_SAFE_INTEGER);
+    if (catDiff !== 0) return catDiff;
+    const hiddenDiff = Number(Boolean(a.hidden)) - Number(Boolean(b.hidden));
+    if (hiddenDiff !== 0) return hiddenDiff;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' });
+  });
   const productsHead = productsTable?.closest('table')?.querySelector('thead tr');
   if (productsHead) productsHead.innerHTML = '<th>Categoría</th><th>Producto</th><th>Precio</th><th>Acciones</th><th>Imagen</th>';
   const categoriesHead = categoriesTable?.closest('table')?.querySelector('thead tr');
   if (categoriesHead) categoriesHead.innerHTML = '<th>Categoría</th><th>Acciones</th><th>Imagen</th>';
-  if (productsTable) productsTable.innerHTML = sorted.map((p) => { const st = getImageUploadStatus('product', p.id); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const prodSrc = resolveImageSource(p.imageUrl || p.imageDataUrl); const imageBlock = prodSrc ? `<div class=\"image-cell\"><img class=\"image-thumb\" src=\"${prodSrc}\" alt=\"${p.name}\" loading=\"lazy\" /><button class=\"danger\" data-prod-img-del=\"${p.id}\" type=\"button\">X</button></div>` : '<span class=\"muted\">Sin imagen</span>'; const err = st?.error ? `<div class=\"upload-error\">${st.error}</div>` : ''; const retry = renderImageRetryHint('product', p.id, p.imageUrl || p.imageDataUrl); return `<tr><td>${p.category || '-'}</td><td>${p.name}</td><td>${money(p.price)}</td><td><button class=\"secondary\" data-prod-edit=\"${p.id}\" type=\"button\">Editar</button> <button class=\"secondary\" data-prod-img=\"${p.id}\" type=\"button\" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> <button class=\"secondary\" data-prod-hide=\"${p.id}\" type=\"button\">${p.hidden ? 'Mostrar' : 'Ocultar'}</button> <button class=\"secondary\" data-prod-del=\"${p.id}\" type=\"button\">Eliminar</button></td><td>${imageBlock}${renderImageUploadProgress('product', p.id)}${err}${retry}</td></tr>`; }).join('');
-  if (categoriesTable) categoriesTable.innerHTML = (state.categories || []).map((c) => { const st = getImageUploadStatus('category', c); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const catSrc = resolveImageSource(state.categoryImages?.[c]); const imageBlock = catSrc ? `<div class=\"image-cell\"><img class=\"image-thumb\" src=\"${catSrc}\" alt=\"${c}\" loading=\"lazy\" /><button class=\"danger\" data-cat-img-del=\"${c}\" type=\"button\">X</button></div>` : '<span class=\"muted\">Sin imagen</span>'; const err = st?.error ? `<div class=\"upload-error\">${st.error}</div>` : ''; const retry = renderImageRetryHint('category', c, state.categoryImages?.[c]); return `<tr><td>${c}</td><td><button class=\"secondary\" data-cat-img=\"${c}\" type=\"button\" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> ${c === 'Todos' ? '' : `<button class=\"secondary\" data-cat-del=\"${c}\" type=\"button\">Eliminar</button>`}</td><td>${imageBlock}${renderImageUploadProgress('category', c)}${err}${retry}</td></tr>`; }).join('');
-  if (productCategory) {
-    productCategory.innerHTML = (state.categories || []).map((c) => `<option value="${c}">${c}</option>`).join('');
-    if (selectedCategory && state.categories.includes(selectedCategory)) productCategory.value = selectedCategory;
+  if (productsTable) {
+    const rows = [];
+    let currentCategory = '';
+    sorted.forEach((p) => {
+      const category = p.category || 'Sin categoría';
+      if (category !== currentCategory) {
+        currentCategory = category;
+        rows.push(`<tr class="products-category-divider"><td colspan="5"><strong>${escapeHtml(category)}</strong></td></tr>`);
+      }
+      const st = getImageUploadStatus('product', p.id);
+      const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen';
+      const prodSrc = resolveImageSource(p.imageUrl || p.imageDataUrl);
+      const imageBlock = prodSrc ? `<div class="image-cell"><img class="image-thumb" src="${prodSrc}" alt="${p.name}" loading="lazy" /><button class="danger" data-prod-img-del="${p.id}" type="button">X</button></div>` : '<span class="muted">Sin imagen</span>';
+      const err = st?.error ? `<div class="upload-error">${st.error}</div>` : '';
+      const retry = renderImageRetryHint('product', p.id, p.imageUrl || p.imageDataUrl);
+      rows.push(`<tr><td>${escapeHtml(category)}</td><td>${escapeHtml(p.name || '')}${p.hidden ? ' <span class="muted">(Oculto)</span>' : ''}</td><td>${money(p.price)}</td><td><button class="secondary" data-prod-edit="${p.id}" type="button">Editar</button> <button class="secondary" data-prod-img="${p.id}" type="button" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> <button class="secondary" data-prod-hide="${p.id}" type="button">${p.hidden ? 'Mostrar' : 'Ocultar'}</button> <button class="secondary" data-prod-del="${p.id}" type="button">Eliminar</button></td><td>${imageBlock}${renderImageUploadProgress('product', p.id)}${err}${retry}</td></tr>`);
+    });
+    productsTable.innerHTML = rows.join('');
   }
-  if (comboProductsSelect) comboProductsSelect.innerHTML = state.products.filter((p) => !p.hidden).map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+  if (categoriesTable) categoriesTable.innerHTML = orderedCategories.map((c, index) => { const st = getImageUploadStatus('category', c); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const catSrc = resolveImageSource(state.categoryImages?.[c]); const imageBlock = catSrc ? `<div class="image-cell"><img class="image-thumb" src="${catSrc}" alt="${c}" loading="lazy" /><button class="danger" data-cat-img-del="${c}" type="button">X</button></div>` : '<span class="muted">Sin imagen</span>'; const err = st?.error ? `<div class="upload-error">${st.error}</div>` : ''; const retry = renderImageRetryHint('category', c, state.categoryImages?.[c]); const upDisabled = index === 0 ? 'disabled' : ''; const downDisabled = index === orderedCategories.length - 1 ? 'disabled' : ''; return `<tr><td>${escapeHtml(c)}</td><td><div class="category-actions"><button class="secondary" data-cat-up="${c}" type="button" ${upDisabled}>↑</button><button class="secondary" data-cat-down="${c}" type="button" ${downDisabled}>↓</button><button class="secondary" data-cat-img="${c}" type="button" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> ${c === 'Todos' ? '' : `<button class="secondary" data-cat-del="${c}" type="button">Eliminar</button>`}</div></td><td>${imageBlock}${renderImageUploadProgress('category', c)}${err}${retry}</td></tr>`; }).join('');
+  if (productCategory) {
+    productCategory.innerHTML = orderedCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
+    if (selectedCategory && orderedCategories.includes(selectedCategory)) productCategory.value = selectedCategory;
+  }
+  if (comboProductsSelect) comboProductsSelect.innerHTML = sorted.filter((p) => !p.hidden).map((p) => `<option value="${p.id}">${p.category || '-'} · ${p.name}</option>`).join('');
   if (openStockBtn) openStockBtn.classList.toggle('hidden', !appConfig.stockActivo);
   renderComboBuilder();
   if (appConfig.stockActivo) renderStockView();
@@ -3616,7 +3695,7 @@ function renderProducts() {
 function renderComboBuilder() {
   const host = document.getElementById('comboItemsTable');
   if (!host) return;
-  const cats = [...new Set(state.products.filter((p) => !p.hidden).map((p) => p.category))];
+  const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   const toolbarId = 'comboBuilderToolbar';
   let toolbar = document.getElementById(toolbarId);
   if (!toolbar) {
@@ -4231,9 +4310,11 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
     console.info('[debt][pay-start]', { saleIds, debtorId });
     const method = methodEl?.value || 'efectivo';
     const targets = getTargetSales().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    if (!targets.length) { alert('No hay deudas pendientes para pagar.'); return; }
     const activeCash = getActiveCashBox();
     const hasActiveCash = Boolean(activeCash);
     const totalDebtAmount = targets.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
+    if (totalDebtAmount <= 0) { alert('La deuda seleccionada ya fue saldada.'); return; }
     let remainingCashMixed = method === 'mixto' ? Math.max(0, Math.min(totalDebtAmount, Number(cashEl?.value || 0))) : 0;
     targets.forEach((sale) => {
       const amount = Number(sale.debtAmount || 0);
@@ -4270,8 +4351,9 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
     persist({ module: 'sale' });
     console.info('[debt][persist]', { debtPaymentsCount: state.debtPayments?.length || 0 });
     renderDebtors();
+    renderSalesHistory();
     renderSummary();
-  renderSoldProductsList();
+    renderSoldProductsList();
     renderDebtPayments();
     Promise.resolve().then(() => syncToCloud({ modules: ['operations'] })).then(() => console.info('[debt][sync] ok')).catch((err) => console.error('[debt][sync] error', err));
     Promise.resolve().then(() => pullFromCloud({ force: true, modules: ['operations'] })).then(() => console.info('[debt][pull] ok')).catch(() => {});
@@ -5004,6 +5086,8 @@ async function closeCashSession() {
       return acc;
     }, {});
 
+    const debtCashIn = dayDebtPayments.reduce((sum, pay) => sum + Number(pay.cashAmount || (pay.method === 'efectivo' ? pay.amount : 0) || 0), 0);
+    const debtQrIn = dayDebtPayments.reduce((sum, pay) => sum + Number(pay.qrAmount || (pay.method === 'qr' ? pay.amount : 0) || 0), 0);
     const cashIn = daySales.reduce((sum, sale) => sum + Number(sale.breakdown?.cash || 0), 0);
     const qrIn = daySales.reduce((sum, sale) => sum + Number(sale.breakdown?.qr || 0), 0);
     const debtPendingTotal = daySales.reduce((sum, sale) => sum + Number(sale.debtAmount || 0), 0);
@@ -5026,8 +5110,10 @@ async function closeCashSession() {
       openingCash: Number(refreshedActiveCash.openingCash || 0),
       cashIn,
       qrIn,
+      debtCashIn,
+      debtQrIn,
       debtPending: debtPendingTotal,
-      finalCashInBox: Number(refreshedActiveCash.openingCash || 0) + cashIn,
+      finalCashInBox: Number(refreshedActiveCash.openingCash || 0) + cashIn + debtCashIn,
       salesCount: daySales.length,
       salesIds: daySales.map((sale) => sale.id),
       salesSnapshot: daySales.map((sale) => ({ ...sale })),
@@ -5769,7 +5855,7 @@ function openComboCreatorModal() {
   const prodSel = document.getElementById('modalComboProd');
   const table = document.getElementById('modalComboTable');
   const totalEl = document.getElementById('modalComboTotal');
-  const cats = [...new Set(state.products.filter((p) => !p.hidden).map((p) => p.category))];
+  const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   if (catSel) catSel.innerHTML = cats.map((c) => `<option value="${c}">${c}</option>`).join('');
   const syncProd = () => {
     const cat = catSel?.value || cats[0] || '';
@@ -6043,6 +6129,7 @@ function wireEvents() {
     persist();
     renderProducts();
     renderSaleSelectors();
+    renderTouchSaleUi();
   });
   addCategoryBtn?.addEventListener('click', () => {
     const cat = newCategoryInput?.value?.trim() || '';
@@ -6052,6 +6139,7 @@ function wireEvents() {
     persist();
     renderProducts();
     renderSaleSelectors();
+    renderTouchSaleUi();
   });
   createComboBtn?.addEventListener('click', () => {
     const name = comboNameInput?.value?.trim() || '';
@@ -6068,6 +6156,7 @@ function wireEvents() {
     persist();
     renderProducts();
     renderSaleSelectors();
+    renderTouchSaleUi();
   });
   comboProductsSelect?.addEventListener('change', () => {
     const ids = Array.from(comboProductsSelect.selectedOptions).map((o) => o.value);
@@ -6088,6 +6177,7 @@ function wireEvents() {
       persist();
       renderProducts();
       renderSaleSelectors();
+      renderTouchSaleUi();
       return;
     }
     const upImg = e.target.closest('button[data-prod-img]');
@@ -6122,9 +6212,14 @@ function wireEvents() {
     persist();
     renderProducts();
     renderSaleSelectors();
+    renderTouchSaleUi();
   });
 
   categoriesTable?.addEventListener('click', (e) => {
+    const upBtn = e.target.closest('button[data-cat-up]');
+    if (upBtn) { if (!moveCategory(upBtn.dataset.catUp, -1)) return; persist(); renderProducts(); renderSaleSelectors(); renderTouchSaleUi(); return; }
+    const downBtn = e.target.closest('button[data-cat-down]');
+    if (downBtn) { if (!moveCategory(downBtn.dataset.catDown, 1)) return; persist(); renderProducts(); renderSaleSelectors(); renderTouchSaleUi(); return; }
     const imgBtn = e.target.closest('button[data-cat-img]');
     if (imgBtn) { openImageUploadForCategory(imgBtn.dataset.catImg); return; }
     const retryCatImg = e.target.closest('button[data-img-retry-kind="category"]');
@@ -6136,7 +6231,7 @@ function wireEvents() {
       return;
     }
     const imgDelBtn = e.target.closest('button[data-cat-img-del]');
-    if (imgDelBtn) { const key = imgDelBtn.dataset.catImgDel || ''; const previous = state.categoryImages[key] || ''; delete state.categoryImages[key]; const ok = persistImageChange(() => { if (previous) state.categoryImages[key] = previous; }); if (!ok) return; renderProducts(); renderTouchSaleUi(); return; }
+    if (imgDelBtn) { const key = imgDelBtn.dataset.catImgDel || ''; const previous = state.categoryImages[key] || ''; delete state.categoryImages[key]; const ok = persistImageChange(() => { if (previous) state.categoryImages[key] = previous; }); if (!ok) return; renderProducts(); renderSaleSelectors(); renderTouchSaleUi(); return; }
     const b = e.target.closest('button[data-cat-del]');
     if (!b) return;
     const cat = b.dataset.catDel;
