@@ -480,6 +480,16 @@ function recordModuleWrite(moduleName, payload, reason = 'sync') {
   setModuleMeta(moduleName, { updatedAt: Number(payload?.updatedAt || Date.now()), lastWriteAt: Date.now(), lastWriteReason: reason });
 }
 
+function markModulesDirty(modules = [], reason = 'local-change') {
+  const payload = snapshotPayload();
+  (modules || []).forEach((moduleName) => {
+    const modulePayload = payload?.[moduleName];
+    if (!modulePayload) return;
+    recordModuleWrite(moduleName, { ...modulePayload, updatedAt: Date.now() }, reason);
+    markModuleHydrated(moduleName, true, { source: reason });
+  });
+}
+
 function syncAppConfig() {
   appConfig = {
     stockActivo: Boolean(state.stockConfig?.enabled),
@@ -3041,6 +3051,17 @@ function renderDebtors() {
   let debtPersonTotal = $('debtPersonTotal');
   const debtPersonDetailsTable = $('debtPersonDetailsTable');
   if (!debtPeopleTable || !debtPersonDetailsTable || !debtPersonTitle) return;
+  const renderDebtorDetails = (personId = '') => {
+    const sales = state.sales.filter((s) => s.debtorId === personId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
+    const person = state.people.find((p) => p.id === personId);
+    const total = sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
+    state.activeDebtorId = personId;
+    debtPersonTitle.textContent = `${personFullName(person)} · ${person?.description || '-'} · Tel: ${person?.phone || '-'}`;
+    debtPersonTotal.textContent = `Deuda total: ${money(total)}`;
+    debtPersonDetailsTable.innerHTML = sales.length
+      ? sales.map((s) => `<tr><td>${new Date(s.createdAt).toLocaleString()}</td><td>${s.items.map((i) => `${i.name} x${i.qty}`).join(', ')}</td><td>${money(s.debtAmount)}</td><td>${s.user}</td><td><button class="secondary" data-pay-sale="${s.id}" type="button">Pagar deuda</button></td></tr>`).join('')
+      : '<tr><td colspan="5">Sin deudas pendientes para mostrar.</td></tr>';
+  };
   if (!debtPersonTotal) {
     debtPersonTotal = document.createElement('p');
     debtPersonTotal.id = 'debtPersonTotal';
@@ -3066,17 +3087,12 @@ function renderDebtors() {
     debtPersonTitle.textContent = 'Selecciona una persona para ver sus deudas pendientes';
     debtPersonDetailsTable.innerHTML = '<tr><td colspan="5">Sin deudas pendientes para mostrar.</td></tr>';
   }
+  if (state.activeDebtorId && grouped.has(state.activeDebtorId)) renderDebtorDetails(state.activeDebtorId);
   if (debtPersonTotal && !state.activeDebtorId) debtPersonTotal.textContent = 'Deuda total: Bs 0.00';
   debtPeopleTable.onclick = (e) => {
     const btn = e.target.closest('button[data-debtor-id]');
     if (!btn) return;
-    const person = state.people.find((p) => p.id === btn.dataset.debtorId);
-    const sales = state.sales.filter((s) => s.debtorId === btn.dataset.debtorId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
-    const total = sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
-    state.activeDebtorId = btn.dataset.debtorId;
-    debtPersonTitle.textContent = `${personFullName(person)} · ${person?.description || '-'} · Tel: ${person?.phone || '-'}`;
-    debtPersonTotal.textContent = `Deuda total: ${money(total)}`;
-    debtPersonDetailsTable.innerHTML = sales.map((s) => `<tr><td>${new Date(s.createdAt).toLocaleString()}</td><td>${s.items.map((i) => `${i.name} x${i.qty}`).join(', ')}</td><td>${money(s.debtAmount)}</td><td>${s.user}</td><td><button class=\"secondary\" data-pay-sale=\"${s.id}\" type=\"button\">Pagar deuda</button></td></tr>`).join('');
+    renderDebtorDetails(btn.dataset.debtorId);
   };
 }
 
@@ -4211,9 +4227,10 @@ function renderSalesHistory() {
   salesTable.innerHTML = list.length ? list.map((sale) => {
     const isAnnulled = sale.saleStatus === 'ANULADA';
     const actions = isAnnulled
-      ? `<span class="muted">Venta anulada${sale.deletedBy ? ` · eliminado por ${sale.deletedBy}` : ''}</span>`
-      : `<button type="button" class="secondary" data-sale-act="view" data-sale-id="${sale.id}">Ver Venta</button> <button type="button" class="secondary" data-sale-act="invoice" data-sale-id="${sale.id}">Ver factura</button>${hasPermission('deleteSales') ? ` <button type="button" class="secondary" data-sale-act="edit" data-sale-id="${sale.id}">Editar venta</button> <button type="button" class="secondary" data-sale-act="del" data-sale-id="${sale.id}">Eliminar venta</button>` : ''}`;
-    return `<tr style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}">${sale.saleStatus}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
+      ? `<span class="muted">Venta anulada${sale.deletedBy ? ` · anulada por ${escapeHtml(sale.deletedBy)}` : ''}</span>`
+      : `<button type="button" class="secondary" data-sale-act="view" data-sale-id="${sale.id}">Ver Venta</button> <button type="button" class="secondary" data-sale-act="invoice" data-sale-id="${sale.id}">Ver factura</button>${hasPermission('deleteSales') ? ` <button type="button" class="secondary" data-sale-act="edit" data-sale-id="${sale.id}">Editar venta</button> <button type="button" class="secondary" data-sale-act="del" data-sale-id="${sale.id}">Anular venta</button>` : ''}`;
+    const statusCell = isAnnulled ? `ANULADA${sale.deletedBy ? `<br><small>anulada por: ${escapeHtml(sale.deletedBy)}</small>` : ''}` : sale.saleStatus;
+    return `<tr style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}">${statusCell}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
   }).join('') : '<tr><td colspan="7">Sin ventas.</td></tr>';
 }
 
@@ -4354,7 +4371,9 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
   overlay.className = 'modal';
   overlay.innerHTML = `<div class="modal-card"><h3>Realizar pago</h3><div class="grid3"><label>Método<select id="dpMethod"><option value="efectivo">Efectivo</option><option value="qr">QR</option><option value="mixto">Mixto</option></select></label><label id="dpCashWrap" class="hidden">Efectivo<input id="dpCash" type="number" min="0" step="0.01" value="0" /></label><label id="dpQrWrap" class="hidden">QR<input id="dpQr" type="text" readonly value="Bs 0.00" /></label></div><div class="grid2"><button id="dpPayBtn" class="primary" type="button">Finalizar</button><button id="dpBackBtn" class="secondary" type="button">Atrás</button></div></div>`;
   document.body.appendChild(overlay);
-  const getTargetSales = () => saleIds.length ? state.sales.filter((s) => saleIds.includes(s.id)) : state.sales.filter((s) => s.debtorId === debtorId && Number(s.debtAmount || 0) > 0);
+  const getTargetSales = () => saleIds.length
+    ? state.sales.filter((s) => saleIds.includes(s.id) && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado')
+    : state.sales.filter((s) => s.debtorId === debtorId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
   const totalDebt = () => getTargetSales().reduce((a, s) => a + Number(s.debtAmount || 0), 0);
   const methodEl = document.getElementById('dpMethod');
   const cashEl = document.getElementById('dpCash');
@@ -4386,6 +4405,7 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
     });
     if (result.totalDebtAmount <= 0 || !result.createdPayments.length) { alert('La deuda seleccionada ya fue saldada.'); return; }
     state.debtPayments.unshift(...result.createdPayments.reverse());
+    markModulesDirty(['operations'], 'debt-payment-local');
     persist({ module: 'sale', sync: false });
     console.info('[debt][persist]', { debtPaymentsCount: state.debtPayments?.length || 0 });
     renderDebtors();
@@ -4399,11 +4419,24 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
       console.info('[debt][sync] ok');
     } catch (err) {
       console.error('[debt][sync] error', err);
-      scheduleCloudSync(600);
+      scheduleCloudSync(600, { modules: ['operations'] });
     }
   });
 }
 
+function confirmSaleAnnulment(sale) {
+  return new Promise((resolve) => {
+    document.getElementById('annulSaleOverlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'annulSaleOverlay';
+    overlay.className = 'modal';
+    overlay.innerHTML = `<div class="modal-card"><h3>Anular venta</h3><p>¿Estás seguro de anular la venta?</p><p><strong>Pedido #${orderNumberLabel(sale?.orderNumber)}</strong></p><div class="grid2"><button id="cancelAnnulSaleBtn" class="secondary" type="button">Cancelar</button><button id="confirmAnnulSaleBtn" class="danger" type="button">Anular</button></div></div>`;
+    document.body.appendChild(overlay);
+    const close = (value) => { overlay.remove(); resolve(value); };
+    document.getElementById('cancelAnnulSaleBtn')?.addEventListener('click', () => close(false));
+    document.getElementById('confirmAnnulSaleBtn')?.addEventListener('click', () => close(true));
+  });
+}
 
 function activeDebtPayments() {
   return (state.debtPayments || []).filter((p) => !p?.anulado);
@@ -6436,7 +6469,7 @@ function wireEvents() {
   clearDeletedSalesFilterBtn?.addEventListener('click', () => { if (deletedSalesFromDate) deletedSalesFromDate.value=''; if (deletedSalesToDate) deletedSalesToDate.value=''; renderDeletedSales(); });
   clearDeletedSalesBtn?.addEventListener('click', () => { state.deletedSales = []; persist(); renderDeletedSales(); });
   salesUserFilter?.addEventListener('change', renderSalesHistory);
-  salesTable?.addEventListener('click', (e) => {
+  salesTable?.addEventListener('click', async (e) => {
     const b = e.target.closest('button[data-sale-id]');
     if (!b) return;
     const sale = state.sales.find((s) => s.id === b.dataset.saleId);
@@ -6455,7 +6488,9 @@ function wireEvents() {
       return;
     }
     if (b.dataset.saleAct === 'del') {
-      if (!hasPermission('deleteSales')) return alert('No tienes permiso para eliminar ventas.');
+      if (!hasPermission('deleteSales')) return alert('No tienes permiso para anular ventas.');
+      const confirmed = await confirmSaleAnnulment(sale);
+      if (!confirmed) return;
       const annulCount = annulDebtPaymentsBySaleId(sale.id, state.currentUser?.username || '-');
       state.deletedSales.unshift({ ...sale, deletedAt: new Date().toISOString(), deletedBy: state.currentUser?.username || '-', annulledDebtPayments: annulCount });
       if (isStockEnabled()) {
@@ -6478,9 +6513,16 @@ function wireEvents() {
       state.deletedRecordIds = state.deletedRecordIds || { cashClosings: [], sales: [], products: [], categories: [] };
       if (!Array.isArray(state.deletedRecordIds.sales)) state.deletedRecordIds.sales = [];
       if (!state.deletedRecordIds.sales.includes(sale.id)) state.deletedRecordIds.sales.push(sale.id);
-      persist({ includeHistory: true });
+      markModulesDirty(['operations', 'history'], 'sale-annul-local');
+      persist({ includeHistory: true, sync: false });
       refreshFinancialViews();
       renderWarehouse();
+      try {
+        await syncToCloud({ modules: ['operations'], includeHistory: true, reason: 'sale-annul' });
+      } catch (err) {
+        console.error('[sale][annul-sync] error', err);
+        scheduleCloudSync(600, { includeHistory: true, modules: ['operations'] });
+      }
       return;
     }
   });
