@@ -4501,6 +4501,29 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
     renderSoldProductsList();
     renderDebtPayments();
     overlay.remove();
+    try {
+      await syncToCloud({ modules: ['operations'], reason: 'debt-payment' });
+      await pullFromCloud({ force: true, modules: ['operations'], reason: 'debt-payment-verify' });
+      const salesOk = [...pendingDebtSaleIds].every((saleId) => {
+        const sale = (state.sales || []).find((s) => s.id === saleId);
+        return sale && Number(sale.debtAmount || 0) <= 0 && sale.paymentStatus === 'realizado';
+      });
+      const paymentsOk = [...pendingDebtPaymentIds].every((paymentId) => (state.debtPayments || []).some((p) => p.id === paymentId));
+      if (!salesOk || !paymentsOk) throw new Error('Verificación post-guardado de deuda no consistente.');
+      pendingDebtSyncChanges = false;
+      pendingDebtSaleIds.clear();
+      pendingDebtPaymentIds.clear();
+      refreshPendingSyncButtons();
+      await showOperationSyncSuccessModal({
+        title: 'Deuda pagada correctamente',
+        message: 'Pago registrado, guardado y sincronizado en la nube correctamente.'
+      });
+    } catch (err) {
+      console.error('[debt][sync-after-pay] error', err);
+      pendingDebtSyncChanges = true;
+      refreshPendingSyncButtons();
+      alert('El pago se aplicó localmente, pero falló el guardado/sincronización en la nube.');
+    }
   });
 }
 
@@ -4515,6 +4538,21 @@ function confirmSaleAnnulment(sale) {
     const close = (value) => { overlay.remove(); resolve(value); };
     document.getElementById('cancelAnnulSaleBtn')?.addEventListener('click', () => close(false));
     document.getElementById('confirmAnnulSaleBtn')?.addEventListener('click', () => close(true));
+  });
+}
+
+function showOperationSyncSuccessModal({ title = 'Operación exitosa', message = 'Guardado y sincronizado correctamente.' } = {}) {
+  return new Promise((resolve) => {
+    document.getElementById('opSyncSuccessOverlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'opSyncSuccessOverlay';
+    overlay.className = 'modal';
+    overlay.innerHTML = `<div class="modal-card"><h3>${escapeHtml(String(title || 'Operación exitosa'))}</h3><p>${escapeHtml(String(message || 'Guardado y sincronizado correctamente.'))}</p><div class="grid2"><button id="opSyncSuccessContinueBtn" class="primary" type="button">Continuar</button></div></div>`;
+    document.body.appendChild(overlay);
+    document.getElementById('opSyncSuccessContinueBtn')?.addEventListener('click', () => {
+      overlay.remove();
+      resolve();
+    });
   });
 }
 
@@ -6483,15 +6521,30 @@ function wireEvents() {
   goSalidasBtn?.addEventListener('click', () => navigateTo('pos/salidas'));
   backFromConfigVentasBtn?.addEventListener('click', () => navigateTo(parentRoute(navStack[navStack.length - 1] || 'home'), { replace: true }));
 
-  addOutflowBtn?.addEventListener('click', () => {
+  addOutflowBtn?.addEventListener('click', async () => {
     if (!getActiveCashBox()) return;
     const amount = Number(outflowAmount?.value || 0);
     if (amount <= 0) return;
-    state.outflows.unshift({ id: uid(), cashBoxId: state.activeCashBoxId || '', createdAt: new Date().toISOString(), direction: outflowDirection?.value || 'salida', method: outflowMethod?.value || 'efectivo', description: outflowDescription?.value || '', amount, user: state.currentUser?.username || '-' });
+    const movement = { id: uid(), cashBoxId: state.activeCashBoxId || '', createdAt: new Date().toISOString(), direction: outflowDirection?.value || 'salida', method: outflowMethod?.value || 'efectivo', description: outflowDescription?.value || '', amount, user: state.currentUser?.username || '-' };
+    state.outflows.unshift(movement);
+    markModulesDirty(['operations'], 'outflow-local');
     if (outflowAmount) outflowAmount.value = '';
     if (outflowDescription) outflowDescription.value = '';
-    persist();
+    persist({ sync: false });
     refreshFinancialViews();
+    try {
+      await syncToCloud({ modules: ['operations'], reason: 'outflow-create' });
+      await pullFromCloud({ force: true, modules: ['operations'], reason: 'outflow-create-verify' });
+      const exists = (state.outflows || []).some((move) => move?.id === movement.id);
+      if (!exists) throw new Error('Movimiento no encontrado tras verificación remota.');
+      await showOperationSyncSuccessModal({
+        title: 'Movimiento realizado exitosamente',
+        message: 'La entrada/salida fue guardada y sincronizada en la nube correctamente.'
+      });
+    } catch (err) {
+      console.error('[outflow][sync] error', err);
+      alert('El movimiento se aplicó localmente, pero falló el guardado/sincronización en la nube.');
+    }
   });
   outflowsTable?.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-out-del]');
@@ -6654,6 +6707,27 @@ function wireEvents() {
       refreshPendingSyncButtons();
       refreshFinancialViews();
       renderWarehouse();
+      try {
+        await syncToCloud({ modules: ['catalog', 'operations'], includeHistory: true, reason: 'sale-annul' });
+        await pullFromCloud({ force: true, modules: ['catalog', 'operations', 'history'], includeHistory: true, reason: 'sale-annul-verify' });
+        const verified = (() => {
+          const saleAfter = (state.sales || []).find((s) => s.id === sale.id);
+          return saleAfter && isSaleAnnulled(saleAfter);
+        })();
+        if (!verified) throw new Error('Anulación no persistida tras verificación remota.');
+        pendingSalesAnnulSyncChanges = false;
+        pendingAnnulSaleIds.delete(String(sale.id));
+        refreshPendingSyncButtons();
+        await showOperationSyncSuccessModal({
+          title: 'Venta anulada correctamente',
+          message: `Pedido N° ${orderNumberLabel(sale.orderNumber)} anulado, guardado y sincronizado en la nube correctamente.`
+        });
+      } catch (err) {
+        console.error('[sale][annul-sync] error', err);
+        pendingSalesAnnulSyncChanges = true;
+        refreshPendingSyncButtons();
+        alert('La venta se anuló localmente, pero falló el guardado/sincronización en la nube.');
+      }
       return;
     }
   });
