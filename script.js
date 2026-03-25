@@ -3663,6 +3663,19 @@ function getOrderedCategories(options = {}) {
   return ordered;
 }
 
+function moveCategory(categoryName = '', direction = 0) {
+  const list = Array.isArray(state.categories) ? state.categories.slice() : [];
+  const from = list.findIndex((x) => String(x || '').trim() === String(categoryName || '').trim());
+  const step = Number(direction || 0);
+  const to = from + step;
+  if (from < 0 || step === 0 || to < 0 || to >= list.length) return false;
+  const temp = list[from];
+  list[from] = list[to];
+  list[to] = temp;
+  state.categories = list;
+  return true;
+}
+
 function reorderProductsWithinCategory(products = [], productId = '', direction = 0) {
   const list = Array.isArray(products) ? products.slice() : [];
   const index = list.findIndex((product) => product?.id === productId);
@@ -3717,7 +3730,7 @@ function renderProducts() {
     });
     productsTable.innerHTML = rows.join('');
   }
-  if (categoriesTable) categoriesTable.innerHTML = (state.categories || []).map((c) => { const st = getImageUploadStatus('category', c); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const catSrc = resolveImageSource(state.categoryImages?.[c]); const imageBlock = catSrc ? `<div class="image-cell"><img class="image-thumb" src="${catSrc}" alt="${c}" loading="lazy" /><button class="danger" data-cat-img-del="${c}" type="button">X</button></div>` : '<span class="muted">Sin imagen</span>'; const err = st?.error ? `<div class="upload-error">${st.error}</div>` : ''; const retry = renderImageRetryHint('category', c, state.categoryImages?.[c]); return `<tr><td>${c}</td><td><button class="secondary" data-cat-img="${c}" type="button" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> ${c === 'Todos' ? '' : `<button class="secondary" data-cat-del="${c}" type="button">Eliminar</button>`}</td><td>${imageBlock}${renderImageUploadProgress('category', c)}${err}${retry}</td></tr>`; }).join('');
+  if (categoriesTable) categoriesTable.innerHTML = (state.categories || []).map((c, index, arr) => { const st = getImageUploadStatus('category', c); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const catSrc = resolveImageSource(state.categoryImages?.[c]); const imageBlock = catSrc ? `<div class="image-cell"><img class="image-thumb" src="${catSrc}" alt="${c}" loading="lazy" /><button class="danger" data-cat-img-del="${c}" type="button">X</button></div>` : '<span class="muted">Sin imagen</span>'; const err = st?.error ? `<div class="upload-error">${st.error}</div>` : ''; const retry = renderImageRetryHint('category', c, state.categoryImages?.[c]); const upDisabled = index === 0 ? 'disabled' : ''; const downDisabled = index === arr.length - 1 ? 'disabled' : ''; return `<tr><td>${c}</td><td><button class="secondary" data-cat-up="${c}" type="button" ${upDisabled}>↑</button> <button class="secondary" data-cat-down="${c}" type="button" ${downDisabled}>↓</button> <button class="secondary" data-cat-img="${c}" type="button" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> ${c === 'Todos' ? '' : `<button class="secondary" data-cat-del="${c}" type="button">Eliminar</button>`}</td><td>${imageBlock}${renderImageUploadProgress('category', c)}${err}${retry}</td></tr>`; }).join('');
   if (productCategory) {
     productCategory.innerHTML = orderedCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
     if (selectedCategory && orderedCategories.includes(selectedCategory)) productCategory.value = selectedCategory;
@@ -6351,6 +6364,24 @@ function wireEvents() {
   });
 
   categoriesTable?.addEventListener('click', (e) => {
+    const up = e.target.closest('button[data-cat-up]');
+    if (up) {
+      if (!moveCategory(up.dataset.catUp, -1)) return;
+      persist();
+      renderProducts();
+      renderSaleSelectors();
+      renderTouchSaleUi();
+      return;
+    }
+    const down = e.target.closest('button[data-cat-down]');
+    if (down) {
+      if (!moveCategory(down.dataset.catDown, 1)) return;
+      persist();
+      renderProducts();
+      renderSaleSelectors();
+      renderTouchSaleUi();
+      return;
+    }
     const imgBtn = e.target.closest('button[data-cat-img]');
     if (imgBtn) { openImageUploadForCategory(imgBtn.dataset.catImg); return; }
     const retryCatImg = e.target.closest('button[data-img-retry-kind="category"]');
