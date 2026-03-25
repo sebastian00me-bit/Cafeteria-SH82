@@ -1,4 +1,4 @@
-onst state = {
+const state = {
   products: JSON.parse(localStorage.getItem('cafeteria_products') || '[]'),
   sales: JSON.parse(localStorage.getItem('cafeteria_sales') || '[]'),
   deletedSales: JSON.parse(localStorage.getItem('cafeteria_deleted_sales') || '[]'),
