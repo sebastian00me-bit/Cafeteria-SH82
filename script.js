@@ -3089,7 +3089,7 @@ function renderDebtors() {
       if (!pendingDebtSyncChanges) return;
       saveBtn.disabled = true;
       try {
-        await syncToCloud({ modules: ['operations'], reason: 'debt-payment-manual-save', forceWriteModules: ['operations'] });
+        await syncToCloud({ modules: ['operations'], reason: 'debt-payment-manual-save' });
         await pullFromCloud({ force: true, modules: ['operations'], reason: 'debt-payment-manual-verify' });
         const salesOk = [...pendingDebtSaleIds].every((saleId) => {
           const sale = (state.sales || []).find((s) => s.id === saleId);
@@ -4502,7 +4502,7 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
     renderDebtPayments();
     overlay.remove();
     try {
-      await syncToCloud({ modules: ['operations'], reason: 'debt-payment', forceWriteModules: ['operations'] });
+      await syncToCloud({ modules: ['operations'], reason: 'debt-payment' });
       await pullFromCloud({ force: true, modules: ['operations'], reason: 'debt-payment-verify' });
       const salesOk = [...pendingDebtSaleIds].every((saleId) => {
         const sale = (state.sales || []).find((s) => s.id === saleId);
@@ -4895,7 +4895,6 @@ async function syncToCloud(options = {}) {
     : ['config', 'catalog', 'operations', 'warehouse'];
   const includeHistory = Boolean(options.includeHistory);
   if (includeHistory && !modules.includes('history')) modules.push('history');
-  const forcedWrites = new Set((Array.isArray(options.forceWriteModules) ? options.forceWriteModules : []).map((m) => String(m || '').trim()).filter(Boolean));
 
   for (const includeToken of authModes) {
     const modeLabel = includeToken ? 'token' : 'sin-token';
@@ -4944,7 +4943,7 @@ async function syncToCloud(options = {}) {
           }
         }
         payload.updatedAt = Math.max(Number(payload.updatedAt || 0), Number(remoteModule?.updatedAt || 0), Date.now());
-        if (!forcedWrites.has(moduleName) && shouldBlockModuleWrite(moduleName, payload, remoteModule)) continue;
+        if (shouldBlockModuleWrite(moduleName, payload, remoteModule)) continue;
         await cloudWritePath(path, payload, { includeToken, method: 'PUT' });
         recordModuleWrite(moduleName, payload, options.reason || 'sync');
         markModuleHydrated(moduleName, true, { source: 'local-sync' });
@@ -6534,7 +6533,7 @@ function wireEvents() {
     persist({ sync: false });
     refreshFinancialViews();
     try {
-      await syncToCloud({ modules: ['operations'], reason: 'outflow-create', forceWriteModules: ['operations'] });
+      await syncToCloud({ modules: ['operations'], reason: 'outflow-create' });
       await pullFromCloud({ force: true, modules: ['operations'], reason: 'outflow-create-verify' });
       const exists = (state.outflows || []).some((move) => move?.id === movement.id);
       if (!exists) throw new Error('Movimiento no encontrado tras verificación remota.');
@@ -6629,7 +6628,7 @@ function wireEvents() {
       if (!pendingSalesAnnulSyncChanges) return;
       saveBtn.disabled = true;
       try {
-        await syncToCloud({ modules: ['catalog', 'operations'], includeHistory: true, reason: 'sales-annul-manual-save', forceWriteModules: ['catalog', 'operations', 'history'] });
+        await syncToCloud({ modules: ['catalog', 'operations'], includeHistory: true, reason: 'sales-annul-manual-save' });
         await pullFromCloud({ force: true, modules: ['catalog', 'operations', 'history'], reason: 'sales-annul-manual-verify', includeHistory: true });
         const annulsOk = [...pendingAnnulSaleIds].every((saleId) => {
           const sale = (state.sales || []).find((s) => s.id === saleId);
@@ -6709,7 +6708,7 @@ function wireEvents() {
       refreshFinancialViews();
       renderWarehouse();
       try {
-        await syncToCloud({ modules: ['catalog', 'operations'], includeHistory: true, reason: 'sale-annul', forceWriteModules: ['catalog', 'operations', 'history'] });
+        await syncToCloud({ modules: ['catalog', 'operations'], includeHistory: true, reason: 'sale-annul' });
         await pullFromCloud({ force: true, modules: ['catalog', 'operations', 'history'], includeHistory: true, reason: 'sale-annul-verify' });
         const verified = (() => {
           const saleAfter = (state.sales || []).find((s) => s.id === sale.id);
