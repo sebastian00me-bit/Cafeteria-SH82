@@ -490,6 +490,19 @@ function markModulesDirty(modules = [], reason = 'local-change') {
   });
 }
 
+function refreshPendingSyncButtons() {
+  const debtBtn = document.getElementById('debtSaveChangesBtn');
+  if (debtBtn) {
+    debtBtn.disabled = !pendingDebtSyncChanges;
+    debtBtn.textContent = pendingDebtSyncChanges ? 'Guardar cambios' : 'Cambios guardados';
+  }
+  const salesBtn = document.getElementById('salesSaveChangesBtn');
+  if (salesBtn) {
+    salesBtn.disabled = !pendingSalesAnnulSyncChanges;
+    salesBtn.textContent = pendingSalesAnnulSyncChanges ? 'Guardar cambios' : 'Cambios guardados';
+  }
+}
+
 function syncAppConfig() {
   appConfig = {
     stockActivo: Boolean(state.stockConfig?.enabled),
@@ -499,6 +512,8 @@ function syncAppConfig() {
 }
 
 let tempConfig = { stockActivo: appConfig.stockActivo, activarPedidos: appConfig.activarPedidos };
+let pendingDebtSyncChanges = false;
+let pendingSalesAnnulSyncChanges = false;
 
 function syncTempConfigFromApp() {
   tempConfig = { stockActivo: appConfig.stockActivo, activarPedidos: appConfig.activarPedidos };
@@ -3051,6 +3066,28 @@ function renderDebtors() {
   let debtPersonTotal = $('debtPersonTotal');
   const debtPersonDetailsTable = $('debtPersonDetailsTable');
   if (!debtPeopleTable || !debtPersonDetailsTable || !debtPersonTitle) return;
+  if (payTotalDebtBtn && !document.getElementById('debtSaveChangesBtn')) {
+    const saveBtn = document.createElement('button');
+    saveBtn.id = 'debtSaveChangesBtn';
+    saveBtn.className = 'secondary';
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Guardar cambios';
+    saveBtn.style.marginLeft = '0.5rem';
+    payTotalDebtBtn.insertAdjacentElement('afterend', saveBtn);
+    saveBtn.addEventListener('click', async () => {
+      if (!pendingDebtSyncChanges) return;
+      saveBtn.disabled = true;
+      try {
+        await syncToCloud({ modules: ['operations'], reason: 'debt-payment-manual-save' });
+        pendingDebtSyncChanges = false;
+      } catch (err) {
+        console.error('[debt][manual-save] error', err);
+        pendingDebtSyncChanges = true;
+      } finally {
+        refreshPendingSyncButtons();
+      }
+    });
+  }
   const renderDebtorDetails = (personId = '') => {
     const sales = state.sales.filter((s) => s.debtorId === personId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
     const person = state.people.find((p) => p.id === personId);
@@ -3094,6 +3131,7 @@ function renderDebtors() {
     if (!btn) return;
     renderDebtorDetails(btn.dataset.debtorId);
   };
+  refreshPendingSyncButtons();
 }
 
 function renderUsers() {
@@ -4245,6 +4283,7 @@ function renderSalesHistory() {
     const statusCell = isAnnulled ? `ANULADA${sale.deletedBy ? `<br><small>anulada por: ${escapeHtml(sale.deletedBy)}</small>` : ''}` : sale.saleStatus;
     return `<tr style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}">${statusCell}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
   }).join('') : '<tr><td colspan="7">Sin ventas.</td></tr>';
+  refreshPendingSyncButtons();
 }
 
 
@@ -4420,6 +4459,8 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
     state.debtPayments.unshift(...result.createdPayments.reverse());
     markModulesDirty(['operations'], 'debt-payment-local');
     persist({ module: 'sale', sync: false });
+    pendingDebtSyncChanges = true;
+    refreshPendingSyncButtons();
     console.info('[debt][persist]', { debtPaymentsCount: state.debtPayments?.length || 0 });
     renderDebtors();
     renderSalesHistory();
@@ -4427,13 +4468,6 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
     renderSoldProductsList();
     renderDebtPayments();
     overlay.remove();
-    try {
-      await syncToCloud({ modules: ['operations'], reason: 'debt-payment' });
-      console.info('[debt][sync] ok');
-    } catch (err) {
-      console.error('[debt][sync] error', err);
-      scheduleCloudSync(600, { modules: ['operations'] });
-    }
   });
 }
 
@@ -6292,6 +6326,7 @@ function wireEvents() {
     const up = e.target.closest('button[data-prod-up]');
     if (up) {
       if (!moveProductWithinCategory(up.dataset.prodUp, -1)) return;
+      markModulesDirty(['catalog'], 'product-order-local');
       persist();
       renderProducts();
       renderSaleSelectors();
@@ -6301,6 +6336,7 @@ function wireEvents() {
     const down = e.target.closest('button[data-prod-down]');
     if (down) {
       if (!moveProductWithinCategory(down.dataset.prodDown, 1)) return;
+      markModulesDirty(['catalog'], 'product-order-local');
       persist();
       renderProducts();
       renderSaleSelectors();
@@ -6494,6 +6530,28 @@ function wireEvents() {
   searchSalesBtn?.addEventListener('click', renderSalesHistory);
   salesOrderSearchInput?.addEventListener('input', renderSalesHistory);
   clearSalesFilterBtn?.addEventListener('click', () => { if (salesUserFilter) salesUserFilter.value=''; if (salesOrderSearchInput) salesOrderSearchInput.value=''; renderSalesHistory(); });
+  if (clearSalesFilterBtn && !document.getElementById('salesSaveChangesBtn')) {
+    const saveBtn = document.createElement('button');
+    saveBtn.id = 'salesSaveChangesBtn';
+    saveBtn.className = 'secondary';
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Guardar cambios';
+    saveBtn.style.marginLeft = '0.5rem';
+    clearSalesFilterBtn.insertAdjacentElement('afterend', saveBtn);
+    saveBtn.addEventListener('click', async () => {
+      if (!pendingSalesAnnulSyncChanges) return;
+      saveBtn.disabled = true;
+      try {
+        await syncToCloud({ modules: ['catalog', 'operations'], includeHistory: true, reason: 'sales-annul-manual-save' });
+        pendingSalesAnnulSyncChanges = false;
+      } catch (err) {
+        console.error('[sale][annul-manual-save] error', err);
+        pendingSalesAnnulSyncChanges = true;
+      } finally {
+        refreshPendingSyncButtons();
+      }
+    });
+  }
   openProductSalesReportBtn?.addEventListener('click', () => { productSalesReportCard?.classList.remove('hidden'); renderProductSalesReport(); });
   closeProductSalesReportBtn?.addEventListener('click', () => productSalesReportCard?.classList.add('hidden'));
   searchDeletedSalesBtn?.addEventListener('click', renderDeletedSales);
@@ -6544,16 +6602,12 @@ function wireEvents() {
       state.deletedRecordIds = state.deletedRecordIds || { cashClosings: [], sales: [], products: [], categories: [] };
       if (!Array.isArray(state.deletedRecordIds.sales)) state.deletedRecordIds.sales = [];
       if (!state.deletedRecordIds.sales.includes(sale.id)) state.deletedRecordIds.sales.push(sale.id);
-      markModulesDirty(['operations', 'history'], 'sale-annul-local');
+      markModulesDirty(['catalog', 'operations', 'history'], 'sale-annul-local');
       persist({ includeHistory: true, sync: false });
+      pendingSalesAnnulSyncChanges = true;
+      refreshPendingSyncButtons();
       refreshFinancialViews();
       renderWarehouse();
-      try {
-        await syncToCloud({ modules: ['operations'], includeHistory: true, reason: 'sale-annul' });
-      } catch (err) {
-        console.error('[sale][annul-sync] error', err);
-        scheduleCloudSync(600, { includeHistory: true, modules: ['operations'] });
-      }
       return;
     }
   });
