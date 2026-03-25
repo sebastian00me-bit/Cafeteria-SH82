@@ -1,80 +1,40 @@
 const state = {
-  products: [],
-  sales: [],
-  deletedSales: [],
-  cashClosings: [],
-  cashSession: null,
-  users: [],
-  currentUser: null,
-  settings: {"title1":"Mi Cafetería","title2":"Pantalla principal","posTitle":"POS Cafetería","posSubtitle":"Ventas, productos, deudas, cierres y resumen diario.","logoDataUrl":"assets/logo-sh82.png","accentColor":"#1f7a5c","bgColor":"#f7f7fb","cardColor":"#ffffff","logoSize":120,"title1Size":32,"title2Size":16,"title1Font":"Inter, system-ui, sans-serif","title2Font":"Inter, system-ui, sans-serif","title1Color":"#1d2530","title2Color":"#6f7a86","posLogoSize":56,"ordersEnabled":true},
-  categories: [],
-  subcategories: {},
-  people: [],
-  stockConfig: {"enabled":false,"min":0},
-  queuedOrders: [],
-  removedPeopleIds: [],
-  userSalesModes: {},
-  touchUiConfigByUser: {},
-  categoryImages: {},
-  orderCounters: {},
-  deletedRecordIds: {"cashClosings":[],"sales":[]},
-  moduleUpdatedAt: {},
-  moduleHydration: {},
-  indexes: { productsById: {}, salesById: {}, usersById: {} },
-  syncLogs: []
+  products: JSON.parse(localStorage.getItem('cafeteria_products') || '[]'),
+  sales: JSON.parse(localStorage.getItem('cafeteria_sales') || '[]'),
+  deletedSales: JSON.parse(localStorage.getItem('cafeteria_deleted_sales') || '[]'),
+  cashClosings: JSON.parse(localStorage.getItem('cafeteria_cash_closings') || '[]'),
+  cashSession: JSON.parse(localStorage.getItem('cafeteria_cash_session') || 'null'),
+  users: JSON.parse(localStorage.getItem('cafeteria_users') || '[]'),
+  currentUser: JSON.parse(localStorage.getItem('cafeteria_current_user') || 'null'),
+  settings: JSON.parse(localStorage.getItem('cafeteria_settings') || '{"title1":"Mi Cafetería","title2":"Pantalla principal","posTitle":"POS Cafetería","posSubtitle":"Ventas, productos, deudas, cierres y resumen diario.","logoDataUrl":"","accentColor":"#1f7a5c","bgColor":"#f7f7fb","cardColor":"#ffffff","logoSize":120,"title1Size":32,"title2Size":16,"title1Font":"Inter, system-ui, sans-serif","title2Font":"Inter, system-ui, sans-serif","title1Color":"#1d2530","title2Color":"#6f7a86","posLogoSize":56,"ordersEnabled":true}'),
+  categories: JSON.parse(localStorage.getItem('cafeteria_categories') || '[]'),
+  people: JSON.parse(localStorage.getItem('cafeteria_people') || '[]'),
+  stockConfig: JSON.parse(localStorage.getItem('cafeteria_stock_config') || '{"enabled":false,"min":0}'),
+  queuedOrders: JSON.parse(localStorage.getItem('cafeteria_queued_orders') || '[]'),
+  removedPeopleIds: JSON.parse(localStorage.getItem('cafeteria_removed_people_ids') || '[]'),
+  userSalesModes: JSON.parse(localStorage.getItem('cafeteria_user_sales_modes') || '{}'),
+  touchUiConfigByUser: JSON.parse(localStorage.getItem('cafeteria_touch_ui_config_by_user') || '{}'),
+  categoryImages: JSON.parse(localStorage.getItem('cafeteria_category_images') || '{}'),
+  orderCounters: JSON.parse(localStorage.getItem('cafeteria_order_counters') || '{}'),
+  deletedRecordIds: JSON.parse(localStorage.getItem('cafeteria_deleted_record_ids') || '{"cashClosings":[],"sales":[],"products":[],"categories":[]}'),
+  subcategories: JSON.parse(localStorage.getItem('cafeteria_subcategories') || '{}'),
+  generalCash: JSON.parse(localStorage.getItem('cafeteria_general_cash') || '{"efectivo":0,"qr":0,"estado":"CERRADA","openedAt":"","closedAt":"","openedBy":"","closedBy":"","updatedAt":0}'),
+  generalClosings: JSON.parse(localStorage.getItem('cafeteria_general_closings') || '[]'),
+  cloudModuleMeta: JSON.parse(localStorage.getItem('cafeteria_cloud_module_meta') || '{}'),
+  moduleHydration: JSON.parse(localStorage.getItem('cafeteria_module_hydration') || '{}')
 };
 
 let sessionWatchInterval = null;
 const SESSION_INACTIVITY_LIMIT_MS = 3 * 60 * 60 * 1000;
 const MAX_IMAGE_UPLOAD_BYTES = Number.POSITIVE_INFINITY;
 const imageUploadStatus = { product: {}, category: {} };
+const IMAGE_DB_NAME = 'cafeteria_images_db';
+const IMAGE_DB_STORE = 'images';
 const imagePreviewCache = {};
 const imageLoadInFlight = {};
 const imageMissingRefs = {};
+let imageDbPromise = null;
 let scheduledImageUiRefresh = 0;
-
-
-const SESSION_STORAGE_KEY = 'cafeteria_session_user';
-const LOCAL_STATE_KEY = 'cafeteria_app_state_v3';
-
-function persistSession() {
-  try {
-    if (state.currentUser?.username) localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ username: state.currentUser.username }));
-    else localStorage.removeItem(SESSION_STORAGE_KEY);
-  } catch {}
-}
-
-function restoreSessionFromStorage() {
-  try {
-    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    const username = String(data?.username || '').trim();
-    if (!username) return;
-    state.currentUser = { username, loginAt: Date.now(), lastActivityAt: Date.now() };
-  } catch {}
-}
-
-function loadLocalState() {
-  try {
-    const raw = localStorage.getItem(LOCAL_STATE_KEY);
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    if (!data || typeof data !== 'object') return;
-    [
-      'products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','subcategories','people','stockConfig',
-      'outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','forceLogoutAt',
-      'userSalesModes','touchUiConfigByUser','categoryImages','orderCounters','deletedRecordIds','generalCash','generalClosings',
-      'moduleUpdatedAt','moduleHydration','syncLogs'
-    ].forEach((key) => {
-      if (data[key] !== undefined) state[key] = data[key];
-    });
-    state.lastSyncAt = Number(data.updatedAt || state.lastSyncAt || 0);
-  } catch (err) {
-    console.error('[local] no se pudo restaurar estado local', err);
-  }
-}
-
 
 const $ = (id) => document.getElementById(id);
 const loginScreen = $('loginScreen');
@@ -264,7 +224,6 @@ const backFromProductsListBtn = $('backFromProductsListBtn');
 const backFromStockBtn = $('backFromStockBtn');
 const productForm = $('productForm');
 const productCategory = $('productCategory');
-const productSubCategory = $('productSubCategory');
 const productName = $('productName');
 const productPrice = $('productPrice');
 const productsTable = $('productsTable');
@@ -275,10 +234,6 @@ const exportProductsFromListBtn = $('exportProductsFromListBtn');
 const newCategoryInput = $('newCategoryInput');
 const addCategoryBtn = $('addCategoryBtn');
 const categoriesTable = $('categoriesTable');
-const subCategoryParentSelect = $('subCategoryParentSelect');
-const subCategoryNameInput = $('subCategoryNameInput');
-const addSubCategoryBtn = $('addSubCategoryBtn');
-const subCategoriesTable = $('subCategoriesTable');
 const comboNameInput = $('comboNameInput');
 const comboPriceInput = $('comboPriceInput');
 const comboProductsSelect = $('comboProductsSelect');
@@ -318,6 +273,8 @@ const soldProductsTable = $('soldProductsTable');
 const cashTotalBox = $('cashTotalBox');
 const qrTotalBox = $('qrTotalBox');
 const closingsMonthFilter = $('closingsMonthFilter');
+const searchClosingsBtn = $('searchClosingsBtn');
+const clearClosingsBtn = $('clearClosingsBtn');
 const cashClosingsTable = $('cashClosingsTable');
 const salesFromDate = $('salesFromDate');
 const salesToDate = $('salesToDate');
@@ -349,12 +306,6 @@ const clearDebtPaymentsFilterBtn = $('clearDebtPaymentsFilterBtn');
 const firebaseDbUrlInput = $('firebaseDbUrlInput');
 const firebaseDbTokenInput = $('firebaseDbTokenInput');
 const firebaseDbPathInput = $('firebaseDbPathInput');
-const cloudProviderInput = $('cloudProviderInput');
-const cloudRootUrlInput = $('cloudRootUrlInput');
-const cloudAuthTypeInput = $('cloudAuthTypeInput');
-const cloudAuthHeaderInput = $('cloudAuthHeaderInput');
-const cloudAuthQueryKeyInput = $('cloudAuthQueryKeyInput');
-const saveDatabaseConfigBtn = $('saveDatabaseConfigBtn');
 const syncNowBtn = $('syncNowBtn');
 const syncStatus = $('syncStatus');
 const billingEnabledInput = $('billingEnabledInput');
@@ -388,27 +339,25 @@ const billingAutoPrintIndicator = $('billingAutoPrintIndicator');
 const billingAutoPrintToggleActionBtn = $('billingAutoPrintToggleActionBtn');
 const closeCashBtnCard = $('closeCashBtn');
 let activeSaleCategory = '';
-let saleSearchQuery = '';
-let productSortMode = 'category';
 let activeOrderId = '';
 let isSubmittingSale = false;
 let saleProceedReady = false;
 state.currentCart = [];
-state.outflows = [];
+state.outflows = JSON.parse(localStorage.getItem('cafeteria_outflows') || '[]');
 state.comboDraft = [];
 state.activeDebtorId = '';
-state.debtPayments = [];
+state.debtPayments = JSON.parse(localStorage.getItem('cafeteria_debt_payments') || '[]');
 state.comboBuilderItems = [];
-state.lastSyncAt = 0;
-state.forceLogoutAt = 0;
-state.cashBoxes = [];
+state.lastSyncAt = Number(localStorage.getItem('cafeteria_last_sync_at') || '0');
+state.forceLogoutAt = Number(localStorage.getItem('cafeteria_force_logout_at') || '0');
+state.cashBoxes = JSON.parse(localStorage.getItem('cafeteria_cash_boxes') || '[]');
 state.selectedClosingIds = [];
 state.generatedClosingsStats = null;
-state.components = [];
-state.componentLinks = {};
-state.componentMoves = [];
-state.generalCash = { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 };
-state.generalClosings = [];
+state.components = JSON.parse(localStorage.getItem('cafeteria_components') || '[]');
+state.componentLinks = JSON.parse(localStorage.getItem('cafeteria_component_links') || '{}');
+state.componentMoves = JSON.parse(localStorage.getItem('cafeteria_component_moves') || '[]');
+state.cashClosingsLoaded = false;
+state.cashClosingsSearchMonth = '';
 
 let appConfig = {
   stockActivo: Boolean(state.stockConfig?.enabled),
@@ -420,8 +369,139 @@ let cloudPullInFlight = null;
 let cloudSyncTimer = null;
 let lastCloudPullAt = 0;
 let cloudHydrated = false;
-const CLOUD_PULL_MIN_INTERVAL_MS = 500;
-const CLOUD_POLL_INTERVAL_MS = 700;
+let bootCloudReady = false;
+let bootListenerReady = false;
+let bootCashReady = false;
+let firebaseRealtimeListener = null;
+let firebaseRealtimeListenerUrl = '';
+let realtimeReconnectTimer = null;
+const CLOUD_PULL_MIN_INTERVAL_MS = 2500;
+const CLOUD_POLL_INTERVAL_MS = 8000;
+const MODULE_DEFAULT_BOOT_ORDER = ['config', 'operations'];
+const MODULE_BACKGROUND_BOOT_ORDER = ['catalog', 'warehouse'];
+const MODULE_HISTORY_ORDER = ['history'];
+const MODULE_CRITICAL_SYNC_GUARDS = {
+  config: true,
+  operations: true,
+  catalog: false,
+  warehouse: false,
+  history: false
+};
+const MODULE_EMPTY_GUARDS = {
+  config: ['settings', 'categories', 'users'],
+  operations: ['cashBoxes', 'activeCashBoxId', 'systemStatus'],
+  catalog: ['products'],
+  warehouse: ['components'],
+  history: []
+};
+
+function safeJsonParse(raw, fallback) {
+  try { return JSON.parse(raw); } catch { return fallback; }
+}
+
+function approxPayloadBytes(value) {
+  try {
+    return new Blob([JSON.stringify(value ?? null)]).size;
+  } catch {
+    try { return JSON.stringify(value ?? null).length; } catch { return 0; }
+  }
+}
+
+function logCloudTransfer(kind, path, payload, meta = {}) {
+  const records = Array.isArray(payload)
+    ? payload.length
+    : (payload && typeof payload === 'object')
+      ? Object.keys(payload).length
+      : (payload == null ? 0 : 1);
+  console.info(`[cloud][${kind}]`, {
+    path,
+    records,
+    approxBytes: approxPayloadBytes(payload),
+    ...meta
+  });
+}
+
+function moduleMetaEntry(moduleName) {
+  if (!state.cloudModuleMeta || typeof state.cloudModuleMeta !== 'object') state.cloudModuleMeta = {};
+  if (!state.cloudModuleMeta[moduleName] || typeof state.cloudModuleMeta[moduleName] !== 'object') state.cloudModuleMeta[moduleName] = {};
+  return state.cloudModuleMeta[moduleName];
+}
+
+function setModuleMeta(moduleName, patch = {}) {
+  state.cloudModuleMeta = { ...(state.cloudModuleMeta || {}), [moduleName]: { ...moduleMetaEntry(moduleName), ...patch } };
+}
+
+function markModuleHydrated(moduleName, hydrated = true, extra = {}) {
+  state.moduleHydration = { ...(state.moduleHydration || {}), [moduleName]: { hydrated: Boolean(hydrated), at: Date.now(), ...extra } };
+}
+
+function isModuleHydrated(moduleName) {
+  return Boolean(state.moduleHydration?.[moduleName]?.hydrated);
+}
+
+function getModuleUpdatedAt(moduleName) {
+  return Number(moduleMetaEntry(moduleName).updatedAt || 0);
+}
+
+function isMeaningfullyEmpty(value) {
+  if (value == null) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  if (typeof value === 'string') return value.trim() === '';
+  return false;
+}
+
+function shouldBlockModuleWrite(moduleName, payload, remoteModule = {}) {
+  if (!MODULE_CRITICAL_SYNC_GUARDS[moduleName]) return false;
+  if (!isModuleHydrated(moduleName)) {
+    console.warn('[sync][guard] módulo crítico no hidratado, escritura bloqueada', { moduleName });
+    return true;
+  }
+  const guardedKeys = MODULE_EMPTY_GUARDS[moduleName] || [];
+  const suspicious = guardedKeys.some((key) => isMeaningfullyEmpty(payload?.[key]) && !isMeaningfullyEmpty(remoteModule?.[key]));
+  if (suspicious) {
+    console.warn('[sync][guard] payload crítico sospechosamente vacío, escritura bloqueada', { moduleName, guardedKeys });
+    return true;
+  }
+  const remoteUpdatedAt = Number(remoteModule?.updatedAt || 0);
+  const localUpdatedAt = Number(payload?.updatedAt || 0);
+  if (remoteUpdatedAt > localUpdatedAt && localUpdatedAt > 0) {
+    console.warn('[sync][guard] remote es más nuevo que local, escritura bloqueada', { moduleName, remoteUpdatedAt, localUpdatedAt });
+    return true;
+  }
+  return false;
+}
+
+function recordModuleRead(moduleName, payload, reason = 'pull') {
+  setModuleMeta(moduleName, { updatedAt: Number(payload?.updatedAt || getModuleUpdatedAt(moduleName) || 0), lastReadAt: Date.now(), lastReadReason: reason });
+}
+
+function recordModuleWrite(moduleName, payload, reason = 'sync') {
+  setModuleMeta(moduleName, { updatedAt: Number(payload?.updatedAt || Date.now()), lastWriteAt: Date.now(), lastWriteReason: reason });
+}
+
+function markModulesDirty(modules = [], reason = 'local-change') {
+  const payload = snapshotPayload();
+  (modules || []).forEach((moduleName) => {
+    const modulePayload = payload?.[moduleName];
+    if (!modulePayload) return;
+    recordModuleWrite(moduleName, { ...modulePayload, updatedAt: Date.now() }, reason);
+    markModuleHydrated(moduleName, true, { source: reason });
+  });
+}
+
+function refreshPendingSyncButtons() {
+  const debtBtn = document.getElementById('debtSaveChangesBtn');
+  if (debtBtn) {
+    debtBtn.disabled = !pendingDebtSyncChanges;
+    debtBtn.textContent = pendingDebtSyncChanges ? 'Guardar cambios' : 'Cambios guardados';
+  }
+  const salesBtn = document.getElementById('salesSaveChangesBtn');
+  if (salesBtn) {
+    salesBtn.disabled = !pendingSalesAnnulSyncChanges;
+    salesBtn.textContent = pendingSalesAnnulSyncChanges ? 'Guardar cambios' : 'Cambios guardados';
+  }
+}
 
 function syncAppConfig() {
   appConfig = {
@@ -432,34 +512,40 @@ function syncAppConfig() {
 }
 
 let tempConfig = { stockActivo: appConfig.stockActivo, activarPedidos: appConfig.activarPedidos };
+let pendingDebtSyncChanges = false;
+let pendingSalesAnnulSyncChanges = false;
+const pendingDebtSaleIds = new Set();
+const pendingDebtPaymentIds = new Set();
+const pendingAnnulSaleIds = new Set();
 
 function syncTempConfigFromApp() {
   tempConfig = { stockActivo: appConfig.stockActivo, activarPedidos: appConfig.activarPedidos };
 }
-state.activeCashBoxId = '';
-state.systemStatus = 'CAJA_CERRADA';
+state.activeCashBoxId = localStorage.getItem('cafeteria_active_cash_box_id') || '';
+state.systemStatus = localStorage.getItem('cafeteria_system_status') || 'CAJA_CERRADA';
 state.salesHistoryMode = 'all';
 
 const SHARED_DB_PATH = 'cafeteria_shared';
 const LEGACY_DB_PATH = 'cafeteria_BaseDatos2';
+// Estructura modular RTDB para reducir descargas:
+// - config: settings/categorías/usuarios y datos de UI relativamente estables.
+// - catalog: catálogo de productos (stock/precios/combos).
+// - operations: ventas/caja/deudas/correlativos, flujo vivo multiusuario.
+// - warehouse: componentes y recetas (links de componentes por producto).
+// - history: históricos pesados (cierres, eliminadas, movimientos archivables).
+// Cada función de sync/pull debe operar por módulo (no por snapshot raíz completo).
+const CLOUD_MODULE_PATHS = {
+  config: 'config',
+  catalog: 'catalog',
+  operations: 'operations',
+  warehouse: 'warehouse',
+  history: 'history'
+};
 const defaultCloudConfig = {
-  cloudProvider: 'firebase',
-  cloudRootUrl: '',
-  cloudAuthType: 'firebase_query',
-  cloudAuthHeader: 'Authorization',
-  cloudAuthQueryKey: 'auth',
-  firebaseDbUrl: 'https://libreria-sh-default-rtdb.firebaseio.com',
-  firebaseDbToken: 'LmCH5BpmvtD5qOa5tyRQH8oli11o24buDZUmqd1n',
+  firebaseDbUrl: 'https://cafeteria-sh82-3dea3-default-rtdb.firebaseio.com',
+  firebaseDbToken: '',
   firebaseDbPath: SHARED_DB_PATH,
-  firebaseConfig: {
-    apiKey: 'AIzaSyBu31FJwbx1XKt2Mj3jU-fgJOLtA_81FWc',
-    authDomain: 'libreria-sh.firebaseapp.com',
-    databaseURL: 'https://libreria-sh-default-rtdb.firebaseio.com',
-    projectId: 'libreria-sh',
-    storageBucket: 'libreria-sh.firebasestorage.app',
-    messagingSenderId: '92864269555',
-    appId: '1:92864269555:web:9c02eee146f3ce35fdfb86'
-  }
+  firebaseStorageBucket: 'cafeteria-sh82-3dea3.firebasestorage.app'
 };
 
 const defaultBillingConfig = {
@@ -517,46 +603,314 @@ function normalizeBillingSettings() {
 
 function normalizeCloudSettings() {
   state.settings = { ...defaultCloudConfig, ...(state.settings || {}) };
-  state.settings.cloudProvider = String(state.settings.cloudProvider || 'firebase').trim().toLowerCase();
-  if (!['firebase', 'custom'].includes(state.settings.cloudProvider)) state.settings.cloudProvider = 'firebase';
-  state.settings.cloudAuthType = String(state.settings.cloudAuthType || 'firebase_query').trim().toLowerCase();
-  if (!['firebase_query', 'query', 'bearer', 'header', 'none'].includes(state.settings.cloudAuthType)) state.settings.cloudAuthType = 'firebase_query';
-  state.settings.cloudAuthHeader = String(state.settings.cloudAuthHeader || 'Authorization').trim() || 'Authorization';
-  state.settings.cloudAuthQueryKey = String(state.settings.cloudAuthQueryKey || 'auth').trim() || 'auth';
-  state.settings.cloudRootUrl = String(state.settings.cloudRootUrl || '').trim();
-  if (!String(state.settings.firebaseDbUrl || '').trim()) state.settings.firebaseDbUrl = defaultCloudConfig.firebaseDbUrl;
-  if (!String(state.settings.firebaseDbToken || '').trim()) state.settings.firebaseDbToken = defaultCloudConfig.firebaseDbToken;
-  const currentPath = String(state.settings.firebaseDbPath || '').trim();
-  if (!currentPath || currentPath === LEGACY_DB_PATH) state.settings.firebaseDbPath = SHARED_DB_PATH;
-  if (!String(state.settings.logoDataUrl || '').trim()) state.settings.logoDataUrl = 'assets/logo-sh82.png';
-  if (!state.settings.cloudRootUrl && state.settings.cloudProvider === 'custom') {
-    const base = String(state.settings.firebaseDbUrl || '').trim().replace(/\/$/, '');
-    if (base) state.settings.cloudRootUrl = `${base}/${state.settings.firebaseDbPath || SHARED_DB_PATH}.json`;
+  const configuredDbUrl = String(state.settings.firebaseDbUrl || '').trim();
+  if (configuredDbUrl && configuredDbUrl !== defaultCloudConfig.firebaseDbUrl) {
+    console.warn('[cloud][config] firebaseDbUrl personalizado detectado; se forzará URL compartida.', { configuredDbUrl, forcedDbUrl: defaultCloudConfig.firebaseDbUrl });
   }
+  state.settings.firebaseDbUrl = defaultCloudConfig.firebaseDbUrl;
+  if (!String(state.settings.firebaseDbToken || '').trim()) state.settings.firebaseDbToken = defaultCloudConfig.firebaseDbToken;
+  if (!String(state.settings.firebaseStorageBucket || '').trim()) state.settings.firebaseStorageBucket = defaultCloudConfig.firebaseStorageBucket;
+  const currentPath = String(state.settings.firebaseDbPath || '').trim();
+  if (currentPath && currentPath !== SHARED_DB_PATH) {
+    console.warn('[cloud][config] firebaseDbPath personalizado detectado; se forzará raíz compartida.', { currentPath, forcedPath: SHARED_DB_PATH });
+  }
+  state.settings.firebaseDbPath = SHARED_DB_PATH;
   normalizeBillingSettings();
 }
 
-function validateAndNormalizeModuleData(moduleName, data) {
-  const next = data;
-  if (moduleName === 'catalog') {
-    if (!Array.isArray(next.products)) next.products = [];
-    if (!Array.isArray(next.categories)) next.categories = [];
-    if (!next.subcategories || typeof next.subcategories !== 'object') next.subcategories = {};
-  }
-  if (moduleName === 'operations') {
-    ['sales', 'deletedSales', 'cashClosings', 'cashBoxes', 'outflows', 'debtPayments', 'people', 'generalClosings'].forEach((k) => {
-      if (!Array.isArray(next[k])) next[k] = [];
-    });
-    if (!next.generalCash || typeof next.generalCash !== 'object') next.generalCash = { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 };
-  }
-  if (moduleName === 'warehouse') {
-    if (!Array.isArray(next.components)) next.components = [];
-    if (!next.componentLinks || typeof next.componentLinks !== 'object') next.componentLinks = {};
-    if (!Array.isArray(next.componentMoves)) next.componentMoves = [];
-  }
+normalizeCloudSettings();
+
+function cloudSeedTemplate() {
+  return {
+    products: [],
+    sales: [],
+    deletedSales: [],
+    cashClosings: [],
+    cashSession: null,
+    users: [],
+    settings: {},
+    categories: [],
+    subcategories: {},
+    people: [],
+    stockConfig: { enabled: false, min: 0 },
+    outflows: [],
+    debtPayments: [],
+    components: [],
+    componentLinks: {},
+    componentMoves: [],
+    cashBoxes: [],
+    activeCashBoxId: '',
+    systemStatus: 'CAJA_CERRADA',
+    forceLogoutAt: 0,
+    userSalesModes: {},
+    touchUiConfigByUser: {},
+    categoryImages: {},
+    orderCounters: {},
+    deletedRecordIds: { cashClosings: [], sales: [], products: [], categories: [] },
+    generalCash: { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 },
+    generalClosings: [],
+    cashStateVersion: 0,
+    cashStateUpdatedAt: 0,
+    updatedAt: 0
+  };
 }
 
-normalizeCloudSettings();
+function normalizeCollectionToArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return Object.values(value).filter((x) => x && typeof x === 'object');
+  return [];
+}
+
+function collectionToObjectById(list = []) {
+  const out = {};
+  normalizeCollectionToArray(list).forEach((item) => {
+    if (!item?.id) return;
+    out[String(item.id)] = item;
+  });
+  return out;
+}
+
+function cloudModulePayloadFromState() {
+  return {
+    config: {
+      settings: state.settings || {},
+      categories: state.categories || [],
+      subcategories: state.subcategories || {},
+      categoryImages: state.categoryImages || {},
+      users: state.users || [],
+      people: state.people || [],
+      stockConfig: state.stockConfig || { enabled: false, min: 0 },
+      userSalesModes: state.userSalesModes || {},
+      touchUiConfigByUser: state.touchUiConfigByUser || {},
+      forceLogoutAt: Number(state.forceLogoutAt || 0),
+      updatedAt: Date.now()
+    },
+    catalog: {
+      products: collectionToObjectById(state.products || []),
+      updatedAt: Date.now()
+    },
+    operations: {
+      sales: collectionToObjectById(state.sales || []),
+      outflows: collectionToObjectById(state.outflows || []),
+      debtPayments: collectionToObjectById(state.debtPayments || []),
+      orderCounters: state.orderCounters || {},
+      cashBoxes: collectionToObjectById(state.cashBoxes || []),
+      activeCashBoxId: state.activeCashBoxId || '',
+      systemStatus: state.systemStatus || 'CAJA_CERRADA',
+      cashSession: state.cashSession || null,
+      generalCash: state.generalCash || { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 },
+      generalClosings: state.generalClosings || [],
+      cashStateVersion: Number(state.cashStateVersion || 0),
+      cashStateUpdatedAt: Number(state.cashStateUpdatedAt || 0),
+      updatedAt: Date.now()
+    },
+    warehouse: {
+      components: collectionToObjectById(state.components || []),
+      componentLinks: state.componentLinks || {},
+      updatedAt: Date.now()
+    },
+    history: {
+      cashClosings: collectionToObjectById(state.cashClosings || []),
+      deletedSales: collectionToObjectById(state.deletedSales || []),
+      componentMoves: collectionToObjectById(state.componentMoves || []),
+      deletedRecordIds: state.deletedRecordIds || { cashClosings: [], sales: [], products: [], categories: [] },
+      updatedAt: Date.now()
+    }
+  };
+}
+
+function normalizeCloudModules(raw = {}) {
+  const flat = cloudSeedTemplate();
+  const data = (raw && typeof raw === 'object') ? raw : {};
+  const config = data.config || {};
+  const catalog = data.catalog || {};
+  const operations = data.operations || {};
+  const warehouse = data.warehouse || {};
+  const history = data.history || {};
+
+  flat.settings = (config.settings && typeof config.settings === 'object') ? { ...config.settings } : {};
+  flat.categories = Array.isArray(config.categories) ? config.categories : [];
+  flat.subcategories = (config.subcategories && typeof config.subcategories === 'object' && !Array.isArray(config.subcategories)) ? config.subcategories : {};
+  flat.categoryImages = (config.categoryImages && typeof config.categoryImages === 'object' && !Array.isArray(config.categoryImages)) ? config.categoryImages : {};
+  flat.users = normalizeCollectionToArray(config.users);
+  flat.people = Array.isArray(config.people) ? config.people : [];
+  flat.stockConfig = (config.stockConfig && typeof config.stockConfig === 'object') ? config.stockConfig : { enabled: false, min: 0 };
+  flat.userSalesModes = (config.userSalesModes && typeof config.userSalesModes === 'object') ? config.userSalesModes : {};
+  flat.touchUiConfigByUser = (config.touchUiConfigByUser && typeof config.touchUiConfigByUser === 'object') ? config.touchUiConfigByUser : {};
+  flat.forceLogoutAt = Number(config.forceLogoutAt || 0);
+
+  flat.products = normalizeCollectionToArray(catalog.products);
+  flat.sales = normalizeCollectionToArray(operations.sales);
+  flat.outflows = normalizeCollectionToArray(operations.outflows);
+  flat.debtPayments = normalizeCollectionToArray(operations.debtPayments);
+  flat.orderCounters = (operations.orderCounters && typeof operations.orderCounters === 'object' && !Array.isArray(operations.orderCounters)) ? operations.orderCounters : {};
+  flat.cashBoxes = normalizeCollectionToArray(operations.cashBoxes);
+  flat.activeCashBoxId = String(operations.activeCashBoxId || '');
+  flat.systemStatus = operations.systemStatus || 'CAJA_CERRADA';
+  flat.cashSession = (operations.cashSession && typeof operations.cashSession === 'object') ? operations.cashSession : null;
+  flat.generalCash = (operations.generalCash && typeof operations.generalCash === 'object') ? operations.generalCash : flat.generalCash;
+  flat.generalClosings = Array.isArray(operations.generalClosings) ? operations.generalClosings : [];
+  flat.cashStateVersion = Number(operations.cashStateVersion || 0);
+  flat.cashStateUpdatedAt = Number(operations.cashStateUpdatedAt || 0);
+
+  flat.components = normalizeCollectionToArray(warehouse.components);
+  flat.componentLinks = (warehouse.componentLinks && typeof warehouse.componentLinks === 'object' && !Array.isArray(warehouse.componentLinks)) ? warehouse.componentLinks : {};
+
+  flat.cashClosings = normalizeCollectionToArray(history.cashClosings);
+  flat.deletedSales = normalizeCollectionToArray(history.deletedSales);
+  flat.componentMoves = normalizeCollectionToArray(history.componentMoves);
+  flat.deletedRecordIds = (history.deletedRecordIds && typeof history.deletedRecordIds === 'object' && !Array.isArray(history.deletedRecordIds))
+    ? history.deletedRecordIds
+    : { cashClosings: [], sales: [], products: [], categories: [] };
+  flat.updatedAt = Math.max(
+    Number(config.updatedAt || 0),
+    Number(catalog.updatedAt || 0),
+    Number(operations.updatedAt || 0),
+    Number(warehouse.updatedAt || 0),
+    Number(history.updatedAt || 0),
+    Date.now()
+  );
+  return normalizeCloudSeedObject(flat);
+}
+
+function normalizeCloudSeedObject(raw) {
+  const base = cloudSeedTemplate();
+  const data = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? { ...raw } : {};
+  const merged = { ...base, ...data };
+  merged.products = normalizeCollectionToArray(merged.products);
+  merged.sales = normalizeCollectionToArray(merged.sales);
+  merged.deletedSales = normalizeCollectionToArray(merged.deletedSales);
+  merged.cashClosings = normalizeCollectionToArray(merged.cashClosings);
+  merged.users = normalizeCollectionToArray(merged.users);
+  if (!Array.isArray(merged.categories)) merged.categories = [];
+  if (!merged.subcategories || typeof merged.subcategories !== 'object' || Array.isArray(merged.subcategories)) merged.subcategories = {};
+  if (!Array.isArray(merged.people)) merged.people = [];
+  if (!merged.stockConfig || typeof merged.stockConfig !== 'object') merged.stockConfig = { enabled: false, min: 0 };
+  if (!Array.isArray(merged.outflows)) merged.outflows = [];
+  if (!Array.isArray(merged.debtPayments)) merged.debtPayments = [];
+  if (!Array.isArray(merged.components)) merged.components = [];
+  if (!merged.componentLinks || typeof merged.componentLinks !== 'object' || Array.isArray(merged.componentLinks)) merged.componentLinks = {};
+  if (!Array.isArray(merged.componentMoves)) merged.componentMoves = [];
+  if (!Array.isArray(merged.cashBoxes)) merged.cashBoxes = [];
+  if (!merged.orderCounters || typeof merged.orderCounters !== 'object' || Array.isArray(merged.orderCounters)) merged.orderCounters = {};
+  if (!merged.deletedRecordIds || typeof merged.deletedRecordIds !== 'object' || Array.isArray(merged.deletedRecordIds)) merged.deletedRecordIds = { cashClosings: [], sales: [], products: [], categories: [] };
+  merged.deletedRecordIds.cashClosings = Array.isArray(merged.deletedRecordIds.cashClosings) ? merged.deletedRecordIds.cashClosings : [];
+  merged.deletedRecordIds.sales = Array.isArray(merged.deletedRecordIds.sales) ? merged.deletedRecordIds.sales : [];
+  merged.deletedRecordIds.products = Array.isArray(merged.deletedRecordIds.products) ? merged.deletedRecordIds.products : [];
+  merged.deletedRecordIds.categories = Array.isArray(merged.deletedRecordIds.categories) ? merged.deletedRecordIds.categories : [];
+  if (!merged.generalCash || typeof merged.generalCash !== 'object' || Array.isArray(merged.generalCash)) merged.generalCash = base.generalCash;
+  merged.generalCash = { ...base.generalCash, ...merged.generalCash };
+  if (!Array.isArray(merged.generalClosings)) merged.generalClosings = [];
+  merged.cashStateVersion = Number(merged.cashStateVersion || 0);
+  merged.cashStateUpdatedAt = Number(merged.cashStateUpdatedAt || 0);
+  if (!merged.settings || typeof merged.settings !== 'object' || Array.isArray(merged.settings)) merged.settings = {};
+  if (!merged.userSalesModes || typeof merged.userSalesModes !== 'object' || Array.isArray(merged.userSalesModes)) merged.userSalesModes = {};
+  if (!merged.touchUiConfigByUser || typeof merged.touchUiConfigByUser !== 'object' || Array.isArray(merged.touchUiConfigByUser)) merged.touchUiConfigByUser = {};
+  if (!merged.categoryImages || typeof merged.categoryImages !== 'object' || Array.isArray(merged.categoryImages)) merged.categoryImages = {};
+  merged.updatedAt = Math.max(Number(merged.updatedAt || 0), Date.now());
+  if (!merged.users.find((u) => u?.username === 'admin')) {
+    merged.users.push({ username: 'admin', password: '5432', permissions: defaultPermissions(), createdBy: 'admin', enabled: true, lastActivityAt: Date.now(), lastLogoutAt: 0 });
+  }
+  return merged;
+}
+
+let cloudSeedValidatedAt = 0;
+async function ensureCloudSeedData(options = {}) {
+  if (!state.settings?.firebaseDbUrl) return;
+  if (!options.force && (Date.now() - cloudSeedValidatedAt) < 5000) return;
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  let lastError = null;
+  for (const includeToken of authModes) {
+    const modeLabel = includeToken ? 'token' : 'sin-token';
+    const rootUrl = buildCloudRootUrl({ includeToken });
+    if (!rootUrl) continue;
+    try {
+      const resp = await fetch(rootUrl);
+      if (!resp.ok) {
+        if (includeToken && (resp.status === 401 || resp.status === 403)) continue;
+        throw new Error(`[seed] GET root fallo ${resp.status}`);
+      }
+      let raw = null;
+      try { raw = await resp.json(); } catch { raw = null; }
+      const validObject = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+      const hasModules = Object.values(CLOUD_MODULE_PATHS).every((path) => validObject[path] && typeof validObject[path] === 'object');
+      if (!hasModules) {
+        const legacyNormalized = normalizeCloudSeedObject(validObject);
+        const modularSeed = cloudModulePayloadFromState();
+        modularSeed.config = { ...modularSeed.config, ...{
+          settings: legacyNormalized.settings,
+          categories: legacyNormalized.categories,
+          subcategories: legacyNormalized.subcategories,
+          categoryImages: legacyNormalized.categoryImages,
+          users: legacyNormalized.users,
+          people: legacyNormalized.people,
+          stockConfig: legacyNormalized.stockConfig,
+          userSalesModes: legacyNormalized.userSalesModes,
+          touchUiConfigByUser: legacyNormalized.touchUiConfigByUser,
+          forceLogoutAt: legacyNormalized.forceLogoutAt
+        }};
+        modularSeed.catalog.products = collectionToObjectById(legacyNormalized.products);
+        modularSeed.operations = {
+          ...modularSeed.operations,
+          sales: collectionToObjectById(legacyNormalized.sales),
+          outflows: collectionToObjectById(legacyNormalized.outflows),
+          debtPayments: collectionToObjectById(legacyNormalized.debtPayments),
+          orderCounters: legacyNormalized.orderCounters || {},
+          cashBoxes: collectionToObjectById(legacyNormalized.cashBoxes),
+          activeCashBoxId: legacyNormalized.activeCashBoxId || '',
+          systemStatus: legacyNormalized.systemStatus || 'CAJA_CERRADA',
+          cashSession: legacyNormalized.cashSession || null,
+          generalCash: legacyNormalized.generalCash || modularSeed.operations.generalCash,
+          generalClosings: legacyNormalized.generalClosings || []
+        };
+        modularSeed.warehouse.components = collectionToObjectById(legacyNormalized.components);
+        modularSeed.warehouse.componentLinks = legacyNormalized.componentLinks || {};
+        modularSeed.history = {
+          ...modularSeed.history,
+          cashClosings: collectionToObjectById(legacyNormalized.cashClosings),
+          deletedSales: collectionToObjectById(legacyNormalized.deletedSales),
+          componentMoves: collectionToObjectById(legacyNormalized.componentMoves),
+          deletedRecordIds: legacyNormalized.deletedRecordIds || { cashClosings: [], sales: [], products: [], categories: [] }
+        };
+        const putResp = await fetch(rootUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modularSeed) });
+        if (!putResp.ok) {
+          if (includeToken && (putResp.status === 401 || putResp.status === 403)) continue;
+          throw new Error(`[seed] PUT seed modular fallo ${putResp.status}`);
+        }
+        console.info('[seed] Estructura modular creada en cafeteria_shared.', { modeLabel });
+      }
+      cloudSeedValidatedAt = Date.now();
+      return;
+    } catch (err) {
+      lastError = err;
+      if (!(includeToken && [401, 403].includes(Number(err?.status || 0)))) {
+        console.error('[seed] Error en ensureCloudSeedData', { modeLabel, message: err?.message });
+      }
+    }
+  }
+  if (lastError) throw lastError;
+}
+
+function saleDebugContext(extra = {}) {
+  const activeCash = getActiveCashBox();
+  return {
+    firebaseDbUrl: state.settings?.firebaseDbUrl || '',
+    firebaseDbPath: state.settings?.firebaseDbPath || '',
+    rootUrlWithToken: buildCloudRootUrl({ includeToken: true }),
+    rootUrlWithoutToken: buildCloudRootUrl({ includeToken: false }),
+    activeCashBoxId: state.activeCashBoxId || '',
+    activeCashExists: Boolean(activeCash),
+    cashStatus: state.systemStatus,
+    currentUser: state.currentUser?.username || '',
+    cloudHydrated,
+    hasOrderCounterMap: Boolean(state.orderCounters && typeof state.orderCounters === 'object'),
+    hasProductsLocal: Array.isArray(state.products),
+    localProductsCount: Array.isArray(state.products) ? state.products.length : -1,
+    localSalesCount: Array.isArray(state.sales) ? state.sales.length : -1,
+    ...extra
+  };
+}
 
 
 function money(v) { return `Bs ${Number(v || 0).toFixed(2)}`; }
@@ -586,13 +940,18 @@ function formatProductWithComboDetails(item) {
   const lines = [...grouped.entries()].map(([n,q]) => `<li>${q} ${n}</li>`).join('');
   return `${item?.name || ''}<ul class="combo-lines">${lines}</ul>`;
 }
-function uid() {
-  const now = Date.now().toString(36);
-  const rand = Math.random().toString(36).slice(2, 10);
-  const user = String(state.currentUser?.username || 'anon').replace(/[^a-z0-9_-]/gi, '').slice(0, 12) || 'anon';
-  return `${now}_${user}_${rand}`;
-}
+function uid() { return `${Date.now()}_${Math.floor(Math.random() * 9999)}`; }
 function setMsg(el, txt, ok = true) { if (!el) return; el.textContent = txt; el.className = ok ? 'ok' : 'error'; }
+
+function safeLocalSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (err) {
+    console.warn('[localStorage] setItem failed', key, err?.message || err);
+    return false;
+  }
+}
 
 function refreshFinancialViews() {
   renderSalesHistory();
@@ -606,145 +965,76 @@ function refreshFinancialViews() {
   renderOutflows();
 }
 
+function productsForLocalPersistence() {
+  return (state.products || []).map((p) => ({ ...p }));
+}
+
+function categoryImagesForLocalPersistence() {
+  return { ...(state.categoryImages || {}) };
+}
+
 function saveLocalState() {
-  try {
-    localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(snapshotPayload()));
-  } catch (err) {
-    console.error('[local] no se pudo guardar estado local', err);
-  }
+  safeLocalSet('cafeteria_last_sync_at', String(state.lastSyncAt || 0));
+  safeLocalSet('cafeteria_force_logout_at', String(state.forceLogoutAt || 0));
+  safeLocalSet('cafeteria_cash_boxes', JSON.stringify(state.cashBoxes || []));
+  safeLocalSet('cafeteria_active_cash_box_id', state.activeCashBoxId || '');
+  safeLocalSet('cafeteria_system_status', state.systemStatus || 'CAJA_CERRADA');
+  safeLocalSet('cafeteria_products', JSON.stringify(productsForLocalPersistence()));
+  safeLocalSet('cafeteria_sales', JSON.stringify(state.sales));
+  safeLocalSet('cafeteria_deleted_sales', JSON.stringify(state.deletedSales));
+  safeLocalSet('cafeteria_cash_closings', JSON.stringify(state.cashClosings));
+  safeLocalSet('cafeteria_cash_session', JSON.stringify(state.cashSession));
+  safeLocalSet('cafeteria_users', JSON.stringify(state.users));
+  safeLocalSet('cafeteria_current_user', JSON.stringify(state.currentUser));
+  safeLocalSet('cafeteria_settings', JSON.stringify(state.settings));
+  safeLocalSet('cafeteria_categories', JSON.stringify(state.categories));
+  safeLocalSet('cafeteria_people', JSON.stringify(state.people));
+  safeLocalSet('cafeteria_stock_config', JSON.stringify(state.stockConfig));
+  safeLocalSet('cafeteria_outflows', JSON.stringify(state.outflows));
+  safeLocalSet('cafeteria_debt_payments', JSON.stringify(state.debtPayments));
+  safeLocalSet('cafeteria_components', JSON.stringify(state.components || []));
+  safeLocalSet('cafeteria_component_links', JSON.stringify(state.componentLinks || {}));
+  safeLocalSet('cafeteria_component_moves', JSON.stringify(state.componentMoves || []));
+  safeLocalSet('cafeteria_queued_orders', JSON.stringify(state.queuedOrders || []));
+  safeLocalSet('cafeteria_removed_people_ids', JSON.stringify(state.removedPeopleIds || []));
+  safeLocalSet('cafeteria_user_sales_modes', JSON.stringify(state.userSalesModes || {}));
+  safeLocalSet('cafeteria_touch_ui_config_by_user', JSON.stringify(state.touchUiConfigByUser || {}));
+  safeLocalSet('cafeteria_category_images', JSON.stringify(categoryImagesForLocalPersistence()));
+  safeLocalSet('cafeteria_order_counters', JSON.stringify(state.orderCounters || {}));
+  safeLocalSet('cafeteria_deleted_record_ids', JSON.stringify(state.deletedRecordIds || { cashClosings: [], sales: [], products: [], categories: [] }));
+  safeLocalSet('cafeteria_subcategories', JSON.stringify(state.subcategories || {}));
+  safeLocalSet('cafeteria_general_cash', JSON.stringify(state.generalCash || { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 }));
+  safeLocalSet('cafeteria_general_closings', JSON.stringify(state.generalClosings || []));
+  safeLocalSet('cafeteria_cloud_module_meta', JSON.stringify(state.cloudModuleMeta || {}));
+  safeLocalSet('cafeteria_module_hydration', JSON.stringify(state.moduleHydration || {}));
 }
 
-const SYNC_MODULES = {
-  config: ['settings', 'stockConfig', 'systemStatus', 'activeCashBoxId', 'cashSession', 'userSalesModes', 'touchUiConfigByUser', 'orderCounters', 'moduleUpdatedAt', 'moduleHydration'],
-  catalog: ['products', 'categories', 'subcategories', 'categoryImages'],
-  operations: ['sales', 'deletedSales', 'cashClosings', 'cashBoxes', 'outflows', 'debtPayments', 'people', 'generalCash', 'generalClosings', 'deletedRecordIds'],
-  warehouse: ['components', 'componentLinks', 'componentMoves'],
-  history: ['sales', 'deletedSales', 'cashClosings', 'generalClosings', 'debtPayments']
-};
-const MODULE_BY_KEY = Object.entries(SYNC_MODULES).reduce((acc, [moduleName, keys]) => {
-  keys.forEach((key) => { acc[key] = moduleName; });
-  return acc;
-}, {});
-const ALL_MODULES = Object.keys(SYNC_MODULES);
-const dirtyModules = new Set();
-let cloudSyncInFlight = null;
-
-function addSyncLog(level, message, meta = {}) {
-  const entry = { id: uid(), at: new Date().toISOString(), level, message, meta };
-  state.syncLogs = Array.isArray(state.syncLogs) ? state.syncLogs : [];
-  state.syncLogs.unshift(entry);
-  if (state.syncLogs.length > 120) state.syncLogs.length = 120;
-  const fn = level === 'error' ? console.error : (level === 'warn' ? console.warn : console.info);
-  fn('[sync-log]', message, meta);
-}
-
-function markModulesHydrated(modules = []) {
-  state.moduleHydration = state.moduleHydration || {};
-  modules.forEach((moduleName) => { state.moduleHydration[moduleName] = true; });
-}
-
-function markModulesDirty(modules = ALL_MODULES) {
-  const at = Date.now();
-  state.moduleUpdatedAt = state.moduleUpdatedAt || {};
-  modules.forEach((moduleName) => {
-    dirtyModules.add(moduleName);
-    state.moduleUpdatedAt[moduleName] = at;
-  });
-}
-
-function shouldBlockModuleWrite(moduleName, payload, remoteModule = {}) {
-  const isEmpty = !payload || (typeof payload === 'object' && Object.keys(payload).length === 0);
-  if (isEmpty) return true;
-  return false;
-}
-
-function buildStateIndexes() {
-  state.indexes = {
-    productsById: Object.fromEntries((state.products || []).filter((x) => x?.id).map((x) => [String(x.id), x])),
-    salesById: Object.fromEntries((state.sales || []).filter((x) => x?.id).map((x) => [String(x.id), x])),
-    usersById: Object.fromEntries((state.users || []).filter((x) => x?.username).map((x) => [String(x.username), x]))
-  };
-}
-
-function modulePayload(moduleName, source = state) {
-  const out = {};
-  (SYNC_MODULES[moduleName] || []).forEach((key) => { out[key] = source[key]; });
-  return out;
-}
-
-function localModulesSnapshot() {
-  return {
-    config: modulePayload('config'),
-    catalog: modulePayload('catalog'),
-    operations: modulePayload('operations'),
-    warehouse: modulePayload('warehouse'),
-    history: modulePayload('history')
-  };
-}
-
-function flattenModulesData(modulesData = {}, extras = {}) {
-  const flat = {};
-  Object.values(modulesData || {}).forEach((moduleChunk) => {
-    if (!moduleChunk || typeof moduleChunk !== 'object') return;
-    Object.entries(moduleChunk).forEach(([k, v]) => { flat[k] = v; });
-  });
-  return { ...flat, ...extras };
-}
-
-function scheduleCloudSync(delayMs = 1200) {
+function scheduleCloudSync(delayMs = 1200, options = {}) {
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  const syncOptions = { ...options };
   cloudSyncTimer = setTimeout(() => {
     cloudSyncTimer = null;
-    syncToCloud().catch((err) => console.error('[sync] scheduled sync failed', err));
+    syncToCloud(syncOptions).catch((err) => console.error('[sync] scheduled sync failed', err));
   }, Math.max(200, Number(delayMs || 1200)));
 }
 
 
-function appendQueryParam(url, key, value) {
-  if (!value) return String(url || '');
-  const separator = String(url || '').includes('?') ? '&' : '?';
-  return `${url}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+function normalizedFirebaseToken() {
+  const raw = String(state.settings?.firebaseDbToken || '').trim();
+  if (!raw || raw === 'undefined' || raw === 'null') return '';
+  return raw;
 }
 
-function cloudConnection() {
-  const provider = String(state.settings?.cloudProvider || 'firebase').toLowerCase();
-  const token = String(state.settings?.firebaseDbToken || '').trim();
-  const headers = {};
-
-  if (provider === 'custom' && String(state.settings?.cloudRootUrl || '').trim()) {
-    let root = String(state.settings.cloudRootUrl || '').trim();
-    const authType = String(state.settings?.cloudAuthType || 'none').toLowerCase();
-    if (authType === 'query') {
-      root = appendQueryParam(root, String(state.settings?.cloudAuthQueryKey || 'token').trim() || 'token', token);
-    } else if (authType === 'bearer' && token) {
-      headers.Authorization = `Bearer ${token}`;
-    } else if (authType === 'header' && token) {
-      headers[String(state.settings?.cloudAuthHeader || 'Authorization').trim() || 'Authorization'] = token;
-    }
-    return { rootUrl: root, headers, provider: 'custom' };
-  }
-
+function buildCloudRootUrl({ includeToken = true } = {}) {
   const base = String(state.settings?.firebaseDbUrl || '').replace(/\/$/, '');
-  if (!base) return { rootUrl: '', headers, provider: 'firebase' };
-  let root = `${base}/${state.settings.firebaseDbPath || SHARED_DB_PATH}.json`;
-  root = appendQueryParam(root, String(state.settings?.cloudAuthQueryKey || 'auth').trim() || 'auth', token);
-  return { rootUrl: root, headers, provider: 'firebase' };
+  if (!base) return '';
+  const token = includeToken ? normalizedFirebaseToken() : '';
+  const qs = token ? `?auth=${encodeURIComponent(token)}` : '';
+  return `${base}/${state.settings.firebaseDbPath || SHARED_DB_PATH}.json${qs}`;
 }
 
 function cloudRootUrl() {
-  return cloudConnection().rootUrl;
-}
-
-function refreshDatabaseConfigUi() {
-  const provider = String(state.settings?.cloudProvider || 'firebase');
-  const isCustom = provider === 'custom';
-  firebaseDbUrlInput?.closest('label')?.classList.toggle('hidden', isCustom);
-  firebaseDbPathInput?.closest('label')?.classList.toggle('hidden', isCustom);
-  cloudRootUrlInput?.closest('label')?.classList.toggle('hidden', !isCustom);
-  cloudAuthTypeInput?.closest('label')?.classList.toggle('hidden', !isCustom);
-  const authType = String(cloudAuthTypeInput?.value || state.settings?.cloudAuthType || 'none');
-  cloudAuthHeaderInput?.closest('label')?.classList.toggle('hidden', !isCustom || authType !== 'header');
-  cloudAuthQueryKeyInput?.closest('label')?.classList.toggle('hidden', (!isCustom && provider !== 'firebase') || (isCustom && authType !== 'query'));
+  return buildCloudRootUrl({ includeToken: true });
 }
 
 function cloudChildUrl(childPath = '') {
@@ -859,38 +1149,216 @@ async function optimizeImageForUpload(file, { maxSize = 300 } = {}) {
 }
 
 async function uploadImageToFirebaseStorage({ kind, key, file, previousUrl = '', onProgress = null }) {
-  const bucket = await resolveStorageBucket();
-  if (!bucket) throw new Error('No se pudo determinar el bucket de Firebase Storage.');
-  const safeKey = normalizeImagePathSegment(key);
-  const ext = file.type.includes('png') ? 'webp' : (file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : 'webp');
-  const folder = kind === 'category' ? 'categorias' : 'productos';
-  const path = `${folder}/${safeKey}-${Date.now()}.${ext}`;
-  const optimized = await optimizeImageForUpload(file, { maxSize: kind === 'category' ? 400 : 300 });
-  const { storage } = await ensureFirebaseStorageSdk(bucket);
-  const ref = storage.ref(path);
-  const task = ref.put(optimized.blob, { contentType: optimized.contentType, cacheControl: 'public,max-age=31536000' });
-  await withTimeout(new Promise((resolve, reject) => {
-    task.on('state_changed', (snap) => {
-      if (!onProgress) return;
-      const total = Number(snap.totalBytes || 0);
-      const loaded = Number(snap.bytesTransferred || 0);
-      onProgress(total > 0 ? Math.round((loaded / total) * 100) : 0);
-    }, (err) => reject(err), () => resolve());
-  }), 20000, 'La subida tardó demasiado. Verifica tu conexión o reglas de Firebase Storage.');
-  const downloadUrl = await withTimeout(ref.getDownloadURL(), 8000, 'No se pudo obtener URL pública de la imagen.');
   try {
-    if (previousUrl && previousUrl.includes('/o/')) {
-      const oldPath = decodeURIComponent(previousUrl.split('/o/')[1]?.split('?')[0] || '');
-      if (oldPath) {
-        await storage.ref(oldPath).delete();
+    const bucket = await resolveStorageBucket();
+    if (!bucket) throw new Error('No se pudo determinar el bucket de Firebase Storage.');
+    const safeKey = normalizeImagePathSegment(key);
+    const ext = file.type.includes('png') ? 'webp' : (file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : 'webp');
+    const folder = kind === 'category' ? 'categorias' : 'productos';
+    const path = `${folder}/${safeKey}-${Date.now()}.${ext}`;
+    const optimized = await optimizeImageForUpload(file, { maxSize: kind === 'category' ? 400 : 300 });
+    const { storage } = await ensureFirebaseStorageSdk(bucket);
+    const ref = storage.ref(path);
+    const task = ref.put(optimized.blob, { contentType: optimized.contentType, cacheControl: 'public,max-age=31536000' });
+    await withTimeout(new Promise((resolve, reject) => {
+      task.on('state_changed', (snap) => {
+        if (!onProgress) return;
+        const total = Number(snap.totalBytes || 0);
+        const loaded = Number(snap.bytesTransferred || 0);
+        onProgress(total > 0 ? Math.round((loaded / total) * 100) : 0);
+      }, (err) => reject(err), () => resolve());
+    }), 20000, 'La subida tardó demasiado. Verifica tu conexión o reglas de Firebase Storage.');
+    const downloadUrl = await withTimeout(ref.getDownloadURL(), 8000, 'No se pudo obtener URL pública de la imagen.');
+    try {
+      if (previousUrl && previousUrl.includes('/o/')) {
+        const oldPath = decodeURIComponent(previousUrl.split('/o/')[1]?.split('?')[0] || '');
+        if (oldPath) {
+          await storage.ref(oldPath).delete();
+        }
       }
+    } catch {}
+    return downloadUrl;
+  } catch (err) {
+    console.error('[storage] Error durante subida/URL en Firebase Storage', { kind, key, message: err?.message });
+    throw err;
+  }
+}
+
+
+function cloudBaseEndpoint({ includeToken = true } = {}) {
+  const root = buildCloudRootUrl({ includeToken });
+  return root ? root.replace(/\.json(\?.*)?$/, '') : '';
+}
+
+function cloudPathUrl(path, { includeToken = true } = {}) {
+  const base = cloudBaseEndpoint({ includeToken });
+  if (!base) return '';
+  const token = includeToken ? normalizedFirebaseToken() : '';
+  const qs = token ? `?auth=${encodeURIComponent(token)}` : '';
+  return `${base}/${String(path || '').replace(/^\/+/, '')}.json${qs}`;
+}
+
+async function cloudReadPath(path, { includeToken = true } = {}) {
+  const url = cloudPathUrl(path, { includeToken });
+  if (!url) throw new Error('[cloud] URL inválida para lectura.');
+  const resp = await fetch(url);
+  if (!resp.ok) throw Object.assign(new Error(`[cloud] GET ${path} fallo (${resp.status})`), { status: resp.status, path });
+  const text = await resp.text();
+  const data = text ? safeJsonParse(text, null) : null;
+  logCloudTransfer('read', path, data, { source: 'fetch', includeToken, status: resp.status });
+  return data;
+}
+
+async function fetchModuleUpdatedAt(moduleName, { includeToken = true, reason = 'poll' } = {}) {
+  const path = CLOUD_MODULE_PATHS[moduleName];
+  if (!path) return 0;
+  const stamp = Number(await cloudReadPath(`${path}/updatedAt`, { includeToken }) || 0);
+  console.info('[cloud][module-stamp]', { moduleName, stamp, reason, cachedStamp: getModuleUpdatedAt(moduleName) });
+  if (stamp) setModuleMeta(moduleName, { updatedAt: stamp, lastStampAt: Date.now(), lastStampReason: reason });
+  return stamp;
+}
+
+async function cloudWritePath(path, value, { method = 'PUT', includeToken = true } = {}) {
+  const url = cloudPathUrl(path, { includeToken });
+  if (!url) throw new Error('[cloud] URL inválida para escritura.');
+  logCloudTransfer('write', path, value, { source: 'fetch', includeToken, method });
+  const resp = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(value)
+  });
+  if (!resp.ok) throw Object.assign(new Error(`[cloud] ${method} ${path} fallo (${resp.status})`), { status: resp.status, path, method });
+}
+
+async function commitSaleToFirebaseTransaction(sale) {
+  await ensureCloudSeedData();
+  console.info('[sale][commit] Iniciando confirmación RTDB', saleDebugContext({ saleId: sale?.id, salePreview: sale }));
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  let lastError = null;
+  for (const includeToken of authModes) {
+    const modeLabel = includeToken ? 'token' : 'sin-token';
+    try {
+      const saleId = String(sale?.id || '');
+      if (!saleId) throw new Error('sale id requerido');
+      const ts = Date.now();
+      const touchedProducts = new Set();
+      (sale.items || []).forEach((item) => {
+        if (item?.id) touchedProducts.add(String(item.id));
+        const product = state.products.find((p) => String(p?.id || '') === String(item?.id || ''));
+        (product?.combo || []).forEach((comboId) => touchedProducts.add(String(comboId)));
+      });
+      const productsPatch = {};
+      touchedProducts.forEach((id) => {
+        const product = (state.products || []).find((p) => String(p?.id || '') === id);
+        if (product) productsPatch[id] = { ...product };
+      });
+      await cloudWritePath(`operations/sales/${encodeURIComponent(saleId)}`, sale, { includeToken, method: 'PUT' });
+      if (sale?.cashBoxId) await cloudWritePath(`operations/orderCounters/${encodeURIComponent(String(sale.cashBoxId))}`, Number(sale.orderNumber || 0), { includeToken, method: 'PUT' });
+      if (Object.keys(productsPatch).length) await cloudWritePath('catalog/products', productsPatch, { includeToken, method: 'PATCH' });
+      await cloudWritePath('operations/updatedAt', ts, { includeToken, method: 'PUT' });
+      if (Object.keys(productsPatch).length) await cloudWritePath('catalog/updatedAt', ts, { includeToken, method: 'PUT' });
+      console.info('[sale][firebase-write]', { saleId: sale.id, productsTouched: Object.keys(productsPatch).length });
+
+      state.lastSyncAt = Number(ts || Date.now());
+      saveLocalState();
+      console.info('[sale][state-after-write]', { saleId: sale.id, localSalesCount: state.sales?.length || 0, activeCashBoxId: state.activeCashBoxId || '' });
+      console.info('[sale][commit] Venta confirmada en RTDB', { saleId: sale.id, modeLabel });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+      console.error('[sale][commit] Error confirmando venta en RTDB', { modeLabel, code: err?.code, status: err?.status, stage: err?.stage, message: err?.message, url: err?.url, saleId: sale?.id, context: saleDebugContext() });
+      if (!(includeToken && [401, 403].includes(Number(err?.status || 0)))) break;
     }
-  } catch {}
-  return downloadUrl;
+  }
+  throw lastError || new Error('sale transaction failed');
+}
+
+function applyCloudData(data) {
+  const normalized = normalizeCloudModules(data);
+  console.info('[users][apply]', { usersCount: Array.isArray(normalized.users) ? normalized.users.length : -1 });
+  console.info('[settings][apply]', { title1: normalized.settings?.title1 || '', hasLogo: Boolean(normalized.settings?.logoDataUrl) });
+  console.info('[billing][apply]', { hasBillingLogo: Boolean(normalized.settings?.billing?.logoDataUrl), billingEnabled: Boolean(normalized.settings?.billing?.enabled) });
+  console.info('[sale][apply]', { salesCount: Array.isArray(normalized.sales) ? normalized.sales.length : -1, activeCashBoxId: normalized.activeCashBoxId || '' });
+  console.info('[debt][apply]', { debtPaymentsCount: Array.isArray(normalized.debtPayments) ? normalized.debtPayments.length : -1 });
+  state.lastSyncAt = Number(normalized.updatedAt || Date.now());
+  state.forceLogoutAt = Number(normalized.forceLogoutAt || 0);
+  ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','subcategories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters','deletedRecordIds','generalCash','generalClosings','cashStateVersion','cashStateUpdatedAt'].forEach((k) => {
+    if (normalized[k] !== undefined) state[k] = normalized[k];
+  });
+  if (state.currentUser && !validateSessionPolicy({ silent: true })) return;
+  normalizeCloudSettings();
+  normalizeWarehouseData();
+  normalizeDebtPaymentsData();
+  normalizePeopleData();
+  normalizeCashState();
+  const removedClosings = new Set((state.deletedRecordIds?.cashClosings || []).map((x) => String(x)));
+  const removedSales = new Set((state.deletedRecordIds?.sales || []).map((x) => String(x)));
+  const removedProducts = new Set((state.deletedRecordIds?.products || []).map((x) => String(x)));
+  const removedCategories = new Set((state.deletedRecordIds?.categories || []).map((x) => String(x).trim()).filter(Boolean));
+  if (removedClosings.size) state.cashClosings = (state.cashClosings || []).filter((x) => !removedClosings.has(String(x?.id || '')));
+  if (removedSales.size) state.sales = (state.sales || []).filter((x) => !removedSales.has(String(x?.id || '')));
+  if (removedProducts.size) state.products = (state.products || []).filter((x) => !removedProducts.has(String(x?.id || '')));
+  if (removedCategories.size) {
+    state.categories = (state.categories || []).filter((category) => !removedCategories.has(String(category || '').trim()));
+    state.products = (state.products || []).map((product) => ((removedCategories.has(String(product?.category || '').trim())) ? { ...product, category: 'Todos' } : product));
+    state.categoryImages = Object.fromEntries(Object.entries(state.categoryImages || {}).filter(([category]) => !removedCategories.has(String(category || '').trim())));
+  }
+  syncAppConfig();
+  saveLocalState();
+  renderOrdersVisibility();
+  renderProducts(); renderOrders(false); renderSalesHistory(); renderDeletedSales(); renderDebtors(); renderDebtPayments(); renderWarehouse(); renderSummary(); renderCashStatus(); renderHomeActions();
+  cloudHydrated = true;
+}
+
+function startFirebaseRealtimeListener(options = {}) {
+  if (typeof EventSource === 'undefined') return;
+  const token = normalizedFirebaseToken();
+  const useToken = Boolean(token) && options.forceNoToken !== true;
+  const url = buildCloudRootUrl({ includeToken: useToken }) || buildCloudRootUrl({ includeToken: false });
+  if (!url || (firebaseRealtimeListener && firebaseRealtimeListenerUrl === url)) return;
+  if (firebaseRealtimeListener) {
+    try { firebaseRealtimeListener.close(); } catch {}
+    firebaseRealtimeListener = null;
+  }
+  firebaseRealtimeListenerUrl = url;
+  try {
+    firebaseRealtimeListener = new EventSource(url);
+    console.info('[cloud][listener] conectado', { url });
+    bootListenerReady = true;
+    console.info('[boot][listener-ready]', { bootListenerReady, url });
+    const handleEvent = (evt) => {
+      let moduleHints = null;
+      try {
+        const payload = JSON.parse(String(evt?.data || '{}'));
+        const path = String(payload?.path || '/');
+        if (path.startsWith('/config')) moduleHints = ['config'];
+        else if (path.startsWith('/catalog')) moduleHints = ['catalog'];
+        else if (path.startsWith('/operations')) moduleHints = ['operations'];
+        else if (path.startsWith('/warehouse')) moduleHints = ['warehouse'];
+        else if (path.startsWith('/history')) moduleHints = ['history'];
+      } catch {}
+      Promise.resolve().then(() => pullFromCloud({ force: true, modules: moduleHints || undefined })).catch(() => {});
+    };
+    firebaseRealtimeListener.addEventListener('put', handleEvent);
+    firebaseRealtimeListener.addEventListener('patch', handleEvent);
+    firebaseRealtimeListener.onerror = () => {
+      console.warn('[cloud][listener] desconectado, reintentando', { url, useToken });
+      try { firebaseRealtimeListener?.close(); } catch {}
+      firebaseRealtimeListener = null;
+      if (realtimeReconnectTimer) clearTimeout(realtimeReconnectTimer);
+      const shouldFallbackNoToken = useToken;
+      realtimeReconnectTimer = setTimeout(() => startFirebaseRealtimeListener({ forceNoToken: shouldFallbackNoToken }), 2500);
+    };
+    console.info('[sync][realtime] Listener RTDB activo', { url, dbPath: state.settings?.firebaseDbPath });
+  } catch (err) {
+    console.error('[sync][realtime] No se pudo iniciar listener RTDB', err);
+  }
 }
 
 async function pullFromCloudWithTimeout(timeoutMs = 1800) {
-  const pullPromise = pullFromCloud({ force: true });
+  const pullPromise = pullFromCloud({ force: true, modules: ['operations', 'catalog'] });
   const timeoutPromise = new Promise((resolve) => setTimeout(resolve, Math.max(300, Number(timeoutMs || 1800))));
   await Promise.race([pullPromise, timeoutPromise]);
 }
@@ -905,82 +1373,160 @@ function blobToDataUrl(blob) {
 }
 
 async function migrateCategoryImageRefsToDataUrls() {
-  return false;
-}
-
-
-function getFirebaseRealtimeRef(path = '') {
-  if (!window.firebase?.database) throw new Error('Firebase Realtime Database SDK no disponible.');
-  const appName = 'cafeteria-realtime';
-  const cfg = { ...(defaultCloudConfig.firebaseConfig || {}), databaseURL: state.settings?.firebaseDbUrl || defaultCloudConfig.firebaseDbUrl };
-  const app = window.firebase.apps.find((a) => a.name === appName) || window.firebase.initializeApp(cfg, appName);
-  const db = window.firebase.database(app);
-  const basePath = state.settings?.firebaseDbPath || SHARED_DB_PATH;
-  const full = path ? `${basePath}/${String(path).replace(/^\/+/, '')}` : basePath;
-  return db.ref(full);
-}
-
-async function commitSaleToFirebaseTransaction(sale, stockMoves = []) {
-  const rootRef = getFirebaseRealtimeRef('');
-  return new Promise((resolve, reject) => {
-    rootRef.transaction((current) => {
-      if (!current || typeof current !== 'object') return current;
-      const operations = (current.operations && typeof current.operations === 'object') ? { ...current.operations } : {};
-      const catalog = (current.catalog && typeof current.catalog === 'object') ? { ...current.catalog } : {};
-      const sales = Array.isArray(operations.sales) ? [...operations.sales] : (Array.isArray(current.sales) ? [...current.sales] : []);
-      if (sales.some((x) => String(x?.id || '') === String(sale.id))) return;
-      const products = Array.isArray(catalog.products) ? [...catalog.products] : (Array.isArray(current.products) ? [...current.products] : []);
-      for (const move of (stockMoves || [])) {
-        const idx = products.findIndex((p) => String(p?.id || '') === String(move.id || ''));
-        if (idx < 0) return;
-        const nextStock = Number(products[idx]?.stockCurrent || 0) - Number(move.qty || 0);
-        if (nextStock < 0) return;
-        products[idx] = { ...products[idx], stockCurrent: nextStock };
-      }
-      sales.unshift({ ...sale });
-      const out = { ...current };
-      out.operations = { ...operations, sales };
-      out.catalog = { ...catalog, products };
-      out.updatedAt = Date.now();
-      return out;
-    }, (error, committed, snapshot) => {
-      if (error) return reject(error);
-      if (!committed) return reject(new Error('Transacción de venta no confirmada en Firebase.'));
-      const data = snapshot?.val?.();
-      if (data) applyCloudData(data, { force: true });
-      resolve(true);
-    }, false);
-  });
+  const entries = Object.entries(state.categoryImages || {}).filter(([, value]) => String(value || '').startsWith('idb:'));
+  if (!entries.length) return false;
+  let changed = false;
+  for (const [category, ref] of entries) {
+    try {
+      const blob = await imageDbGet(String(ref).slice(4));
+      if (!blob) continue;
+      state.categoryImages[category] = await blobToDataUrl(blob);
+      changed = true;
+    } catch {}
+  }
+  if (changed) persist();
+  return changed;
 }
 
 async function reserveNextOrderNumber(cashBoxId) {
-  if (!cashBoxId) throw new Error('No hay caja activa para generar correlativo.');
-  const counterRef = getFirebaseRealtimeRef(`operations/orderCounters/${encodeURIComponent(cashBoxId)}`);
-  return new Promise((resolve, reject) => {
-    counterRef.transaction((current) => (Number(current || 0) + 1), (error, committed, snapshot) => {
-      if (error) return reject(error);
-      if (!committed) return reject(new Error('No se pudo reservar correlativo de pedido.'));
-      const next = Number(snapshot?.val?.() || 0);
-      state.orderCounters = state.orderCounters || {};
-      state.orderCounters[cashBoxId] = next;
-      if (state.cashSession && state.cashSession.id === cashBoxId) state.cashSession.orderCounter = next + 1;
-      resolve(next);
-    }, false);
-  });
+  await ensureCloudSeedData();
+  console.info('[sale][order-number] Reservando correlativo', saleDebugContext({ cashBoxId }));
+  const fallback = () => {
+    const lastIssued = Number(state.orderCounters?.[cashBoxId] || 0);
+    const sessionCandidate = Number(state.cashSession?.orderCounter || 1);
+    const next = lastIssued > 0 ? (lastIssued + 1) : (sessionCandidate > 0 ? sessionCandidate : 1);
+    state.orderCounters = state.orderCounters || {};
+    state.orderCounters[cashBoxId] = next;
+    if (state.cashSession && state.cashSession.id === cashBoxId) state.cashSession.orderCounter = next + 1;
+    return next;
+  };
+  const root = cloudRootUrl();
+  if (!root || !cashBoxId) {
+    console.error('[sale][order-number] fallback por datos faltantes', saleDebugContext({ cashBoxId, reason: !root ? 'sin_root' : 'sin_cashbox' }));
+    return fallback();
+  }
+  const counterPath = encodeURIComponent(cashBoxId);
+  const counterUrl = root.replace(/\.json(\?.*)?$/, `/operations/orderCounters/${counterPath}.json$1`);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const getResp = await fetch(counterUrl, { headers: { 'X-Firebase-ETag': 'true' } });
+    if (!getResp.ok) {
+      console.error('[sale][order-number] GET counter falló', { status: getResp.status, counterUrl, cashBoxId });
+      break;
+    }
+    const etag = getResp.headers.get('ETag') || '*';
+    const current = Number(await getResp.json()) || 0;
+    const next = current + 1;
+    const putResp = await fetch(counterUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'if-match': etag },
+      body: JSON.stringify(next)
+    });
+    if (putResp.status === 412) continue;
+    if (!putResp.ok) {
+      console.error('[sale][order-number] PUT counter falló', { status: putResp.status, counterUrl, cashBoxId });
+      break;
+    }
+    state.orderCounters = state.orderCounters || {};
+    state.orderCounters[cashBoxId] = next;
+    if (state.cashSession && state.cashSession.id === cashBoxId) state.cashSession.orderCounter = next + 1;
+    return next;
+  }
+  return fallback();
 }
-
 
 function persist(options = {}) {
   if (state.currentUser && !validateSessionPolicy({ silent: false })) return;
-  markModulesDirty(Array.isArray(options.modules) && options.modules.length ? options.modules : ALL_MODULES);
+  if (options.module === 'users') console.info('[users][persist]', { usersCount: state.users?.length || 0 });
+  if (options.module === 'settings') console.info('[settings][persist]', { title1: state.settings?.title1 || '', hasLogo: Boolean(state.settings?.logoDataUrl) });
+  if (options.module === 'sale') console.info('[sale][persist]', { salesCount: state.sales?.length || 0, activeCashBoxId: state.activeCashBoxId || '' });
   saveLocalState();
   if (options.sync === false) return;
   if (!cloudHydrated) return;
-  scheduleCloudSync(document.hidden ? 1200 : 600);
+  scheduleCloudSync(document.hidden ? 1200 : 600, { includeHistory: Boolean(options.includeHistory), modules: options.modules });
+}
+
+function cashStatePayloadFromState() {
+  return {
+    cashBoxes: collectionToObjectById(state.cashBoxes || []),
+    activeCashBoxId: state.activeCashBoxId || '',
+    systemStatus: state.systemStatus || 'CAJA_CERRADA',
+    cashSession: state.cashSession || null,
+    generalCash: state.generalCash || { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 },
+    generalClosings: state.generalClosings || [],
+    cashStateVersion: Number(state.cashStateVersion || 0),
+    cashStateUpdatedAt: Number(state.cashStateUpdatedAt || 0),
+    updatedAt: Date.now()
+  };
+}
+
+function applyCashStateSnapshot(snapshot = {}) {
+  state.cashBoxes = normalizeCollectionToArray(snapshot.cashBoxes);
+  state.activeCashBoxId = String(snapshot.activeCashBoxId || '');
+  state.systemStatus = snapshot.systemStatus || 'CAJA_CERRADA';
+  state.cashSession = snapshot.cashSession || null;
+  state.generalCash = (snapshot.generalCash && typeof snapshot.generalCash === 'object')
+    ? { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0, ...snapshot.generalCash }
+    : { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 };
+  state.generalClosings = Array.isArray(snapshot.generalClosings) ? snapshot.generalClosings : [];
+  state.cashStateVersion = Number(snapshot.cashStateVersion || state.cashStateVersion || 0);
+  state.cashStateUpdatedAt = Number(snapshot.cashStateUpdatedAt || state.cashStateUpdatedAt || 0);
+  normalizeCashState();
+  saveLocalState();
+}
+
+async function pullCashStateFromCloud(reason = 'cash-pull') {
+  if (!state.settings.firebaseDbUrl) return null;
+  await ensureCloudSeedData();
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  for (const includeToken of authModes) {
+    try {
+      const operations = await cloudReadPath('operations', { includeToken }) || {};
+      const snapshot = {
+        cashBoxes: operations.cashBoxes || {},
+        activeCashBoxId: operations.activeCashBoxId || '',
+        systemStatus: operations.systemStatus || 'CAJA_CERRADA',
+        cashSession: operations.cashSession || null,
+        generalCash: operations.generalCash || null,
+        generalClosings: operations.generalClosings || [],
+        cashStateVersion: Number(operations.cashStateVersion || 0),
+        cashStateUpdatedAt: Number(operations.cashStateUpdatedAt || 0)
+      };
+      applyCashStateSnapshot(snapshot);
+      markModuleHydrated('operations', true, { source: reason });
+      return snapshot;
+    } catch (err) {
+      if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+      throw err;
+    }
+  }
+  return null;
+}
+
+async function syncCashStateToCloud(reason = 'cash-sync') {
+  if (!state.settings.firebaseDbUrl) return;
+  await ensureCloudSeedData();
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  const payload = cashStatePayloadFromState();
+  for (const includeToken of authModes) {
+    try {
+      await cloudWritePath('operations', payload, { includeToken, method: 'PATCH' });
+      recordModuleWrite('operations', payload, reason);
+      markModuleHydrated('operations', true, { source: reason });
+      state.lastSyncAt = Math.max(Number(state.lastSyncAt || 0), Number(payload.updatedAt || 0));
+      saveLocalState();
+      return payload;
+    } catch (err) {
+      if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+      throw err;
+    }
+  }
+  return payload;
 }
 
 function defaultPermissions() {
-  return { openCash: true, closeCash: true, deleteSales: true, accessSettings: true, manageProducts: true, manageCombos: true, editProductPrices: true, viewOrders: true, deleteClosings: true, deleteCashMovements: true, clearDeletedSalesHistory: true, manageUsers: true, viewSalesButton: true, viewSettingsButton: true, viewCloseCashButton: true, viewProductsTab: true, viewConfigVentasTab: true, viewDebtorsTab: true, viewSummaryTab: true, viewClosingsTab: true, viewWarehouseButton: true, viewSalesModeButton: true, abrir_cerrar_caja_general: true };
+  return { openCash: true, closeCash: true, deleteSales: true, accessSettings: true, manageProducts: true, manageCombos: true, editProductPrices: true, viewOrders: true, deleteClosings: true, deleteCashMovements: true, clearDeletedSalesHistory: true, manageUsers: true, viewSalesButton: true, viewSettingsButton: true, viewCloseCashButton: true, viewProductsTab: true, viewConfigVentasTab: true, viewDebtorsTab: true, viewSummaryTab: true, viewClosingsTab: true, viewWarehouseButton: true, viewSalesModeButton: true };
 }
 
 function ensureUsers() {
@@ -1019,10 +1565,6 @@ function canCloseCash() {
   return hasPermission('closeCash') || hasPermission('authorizeCash');
 }
 
-function canManageGeneralCash() {
-  return hasPermission('abrir_cerrar_caja_general') || isAdminUser();
-}
-
 function isAdminUser() {
   return state.currentUser?.username === 'admin';
 }
@@ -1036,8 +1578,13 @@ function getActiveCashBox() {
     const box = getCashBoxById(state.activeCashBoxId);
     if (box && box.estado === 'ABIERTA') return box;
   }
-  const fallback = (state.cashBoxes || []).find((box) => box.estado === 'ABIERTA') || null;
-  if (fallback) state.activeCashBoxId = fallback.id;
+  const fallback = [...(state.cashBoxes || [])]
+    .filter((box) => box?.estado === 'ABIERTA')
+    .sort((a, b) => cashBoxTimelineValue(b) - cashBoxTimelineValue(a))[0] || null;
+  if (fallback) {
+    state.activeCashBoxId = fallback.id;
+    state.systemStatus = 'CAJA_ABIERTA';
+  }
   return fallback;
 }
 
@@ -1046,8 +1593,17 @@ function isCashOpen() {
 }
 
 function salesForActiveCashBox() {
+  const list = Array.isArray(state.sales) ? state.sales : [];
   if (!state.activeCashBoxId) return [];
-  return state.sales.filter((sale) => sale.cashBoxId === state.activeCashBoxId);
+  return list.filter((sale) => sale.cashBoxId === state.activeCashBoxId);
+}
+
+function isSaleAnnulled(sale = {}) {
+  return sale?.saleStatus === 'ANULADA' || Boolean(sale?.annulledAt) || Boolean(sale?.deletedAt);
+}
+
+function isCountableActiveSale(sale = {}) {
+  return !sale?.carryOverDebt && !isSaleAnnulled(sale);
 }
 
 function isSessionExpired() {
@@ -1134,20 +1690,10 @@ function beginSessionWatcher() {
 
 function normalizeCashState() {
   if (!Array.isArray(state.cashBoxes)) state.cashBoxes = [];
-  if (!state.generalCash || typeof state.generalCash !== 'object') state.generalCash = { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 };
-  state.generalCash.efectivo = Math.max(0, Number(state.generalCash.efectivo || 0));
-  state.generalCash.qr = Math.max(0, Number(state.generalCash.qr || 0));
-  state.generalCash.estado = state.generalCash.estado === 'ABIERTA' ? 'ABIERTA' : 'CERRADA';
-  state.generalCash.openedAt = state.generalCash.openedAt || '';
-  state.generalCash.closedAt = state.generalCash.closedAt || '';
-  state.generalCash.openedBy = state.generalCash.openedBy || '';
-  state.generalCash.closedBy = state.generalCash.closedBy || '';
-  state.generalCash.updatedAt = Number(state.generalCash.updatedAt || 0);
-  if (!Array.isArray(state.generalClosings)) state.generalClosings = [];
   const openBoxes = state.cashBoxes.filter((box) => box.estado === 'ABIERTA');
   if (openBoxes.length > 1) {
-    const keep = openBoxes[0];
-    state.cashBoxes = state.cashBoxes.map((box, idx) => (idx > 0 && box.estado === 'ABIERTA' ? { ...box, estado: 'CERRADA', fecha_cierre: box.fecha_cierre || new Date().toISOString() } : box));
+    const keep = [...openBoxes].sort((a, b) => cashBoxTimelineValue(b) - cashBoxTimelineValue(a))[0];
+    state.cashBoxes = state.cashBoxes.map((box) => (box.estado === 'ABIERTA' && box.id !== keep.id ? { ...box, estado: 'CERRADA', fecha_cierre: box.fecha_cierre || new Date().toISOString() } : box));
     state.activeCashBoxId = keep.id;
   }
   const activeCash = getActiveCashBox();
@@ -1162,50 +1708,27 @@ function normalizeCashState() {
       state.cashSession = { id: activeCash.id, openedAt: activeCash.fecha_apertura, openingCash: Number(activeCash.openingCash || 0), orderCounter: 1 };
     }
   }
+  state.cashStateVersion = Math.max(Number(state.cashStateVersion || 0), Number(state.cashStateUpdatedAt || 0), Number(state.generalCash?.updatedAt || 0), 0);
+  state.cashStateUpdatedAt = Math.max(Number(state.cashStateUpdatedAt || 0), Number(state.generalCash?.updatedAt || 0), 0);
 }
 
-function isGeneralCashOpen() {
-  return String(state.generalCash?.estado || 'CERRADA') === 'ABIERTA';
-}
-
-function activeDailyCashMetrics(cashBoxId = state.activeCashBoxId) {
-  const box = getCashBoxById(cashBoxId);
-  if (!box) return { openingCash: 0, cashIn: 0, qrIn: 0, outCash: 0, inCash: 0, outQr: 0, inQr: 0, netCash: 0, netQr: 0 };
-  const sales = (state.sales || []).filter((sale) => sale.cashBoxId === cashBoxId && !sale.carryOverDebt);
-  const debtPayments = activeDebtPayments().filter((p) => p.cashBoxId === cashBoxId);
-  const cashSales = sales.reduce((a, s) => a + Number(s.breakdown?.cash || 0), 0);
-  const qrSales = sales.reduce((a, s) => a + Number(s.breakdown?.qr || 0), 0);
-  const debtCash = debtPayments.reduce((a, p) => a + Number(p.cashAmount || (p.method === 'efectivo' ? p.amount : 0) || 0), 0);
-  const debtQr = debtPayments.reduce((a, p) => a + Number(p.qrAmount || (p.method === 'qr' ? p.amount : 0) || 0), 0);
-  const moves = (state.outflows || []).filter((o) => o.cashBoxId === cashBoxId && String(o.caja || 'caja_dia') === 'caja_dia' && String(o.tipo || o.direction || '') !== 'transferencia');
-  const outCash = moves.filter((o) => o.direction === 'salida' && o.method === 'efectivo').reduce((a, o) => a + Number(o.amount || 0), 0);
-  const inCash = moves.filter((o) => o.direction === 'entrada' && o.method === 'efectivo').reduce((a, o) => a + Number(o.amount || 0), 0);
-  const outQr = moves.filter((o) => o.direction === 'salida' && o.method === 'qr').reduce((a, o) => a + Number(o.amount || 0), 0);
-  const inQr = moves.filter((o) => o.direction === 'entrada' && o.method === 'qr').reduce((a, o) => a + Number(o.amount || 0), 0);
-  const openingCash = Number(box.openingCash || 0);
-  return {
-    openingCash,
-    cashIn: cashSales + debtCash,
-    qrIn: qrSales + debtQr,
-    outCash,
-    inCash,
-    outQr,
-    inQr,
-    netCash: openingCash + cashSales + debtCash + inCash - outCash,
-    netQr: qrSales + debtQr + inQr - outQr
-  };
-}
-
-function globalCashTotals() {
-  const daily = getActiveCashBox() ? activeDailyCashMetrics() : { netCash: 0, netQr: 0 };
-  const efectivo = Number(state.generalCash?.efectivo || 0) + Number(daily.netCash || 0);
-  const qr = Number(state.generalCash?.qr || 0) + Number(daily.netQr || 0);
-  return { efectivo, qr, total: efectivo + qr };
+function bumpCashStateVersion(reason = 'cash-state') {
+  const ts = Date.now();
+  state.cashStateVersion = Math.max(Number(state.cashStateVersion || 0), ts);
+  state.cashStateUpdatedAt = ts;
+  console.info('[cash][version]', { reason, cashStateVersion: state.cashStateVersion, cashStateUpdatedAt: state.cashStateUpdatedAt });
+  return ts;
 }
 
 function ensureSeedData() {
-  if (!Array.isArray(state.categories)) state.categories = [];
-  if (!Array.isArray(state.products)) state.products = [];
+  if (!Array.isArray(state.categories) || !state.categories.length) state.categories = ['Todos', 'Bebidas', 'Comidas'];
+  if (!state.categories.includes('Todos')) state.categories.unshift('Todos');
+  if (!Array.isArray(state.products) || !state.products.length) {
+    state.products = [
+      { id: uid(), category: 'Bebidas', name: 'Mocochinchi', price: 5, hidden: false },
+      { id: uid(), category: 'Comidas', name: 'Sandwich', price: 12, hidden: false }
+    ];
+  }
 }
 
 
@@ -1265,51 +1788,6 @@ function setTouchUiConfigForCurrentUser(patch = {}) {
   persist();
 }
 
-function getProductsForSaleCategory(category) {
-  return state.products.filter((p) => {
-    if (p.hidden || p.category !== category) return false;
-    if (!isStockEnabled()) return true;
-    return Number(p.stockCurrent || 0) > 0;
-  });
-}
-
-function getSubCategoriesForCategory(category) {
-  return Array.isArray(state.subcategories?.[category]) ? state.subcategories[category] : [];
-}
-
-function getSaleSubCategoryOptions(category) {
-  const products = getProductsForSaleCategory(category);
-  const subMap = new Map(getSubCategoriesForCategory(category).map((sub) => [String(sub.id), sub]));
-  const used = new Set(products.map((p) => String(p.subcategoryId || '')).filter(Boolean));
-  const options = [];
-  subMap.forEach((sub, id) => {
-    if (used.has(id)) options.push({ id, name: sub.name || 'Sin nombre', image: sub.image || '' });
-  });
-  return options;
-}
-
-function getProductsForSaleSelection(category, subcategoryId = '') {
-  return getProductsForSaleCategory(category).filter((p) => String(p.subcategoryId || '') === String(subcategoryId || ''));
-}
-
-function getSaleSearchProducts() {
-  const query = String(saleSearchQuery || '').trim().toLowerCase();
-  const base = (state.products || []).filter((p) => !p.hidden).filter((p) => !isStockEnabled() || Number(p.stockCurrent || 0) > 0);
-  if (!query) return [];
-  return base.filter((p) => {
-    if (activeSaleCategory && p.category !== activeSaleCategory) return false;
-    return String(p.name || '').toLowerCase().includes(query);
-  });
-}
-
-function renderProductSubCategoryOptions(category, selected = '') {
-  if (!productSubCategory) return;
-  const list = getSubCategoriesForCategory(category);
-  productSubCategory.innerHTML = `<option value="">Sin asignar</option>${list.map((sub) => `<option value="${sub.id}">${sub.name || 'Sin nombre'}</option>`).join('')}`;
-  if (selected && list.some((sub) => String(sub.id) === String(selected))) productSubCategory.value = String(selected);
-  else productSubCategory.value = '';
-}
-
 function saleTotals() {
   const gross = state.currentCart.reduce((a, i) => a + i.price * i.qty, 0);
   const discount = state.currentCart.reduce((a, i) => a + (i.price * i.qty * (i.discountPct || 0) / 100), 0);
@@ -1342,62 +1820,37 @@ function renderCart() {
 
 function renderSaleSelectors() {
   if (!saleCategoryButtons || !saleCategorySelectors) return;
-  const searchProducts = getSaleSearchProducts();
-  if (String(saleSearchQuery || '').trim()) {
-    saleCategoryButtons.innerHTML = activeSaleCategory ? `<button type="button" class="secondary tab active">${activeSaleCategory}</button>` : '<p>Resultados de búsqueda</p>';
-  }
-  const cats = [...new Set(state.products.filter((p) => !p.hidden).map((p) => p.category))];
+  const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   if (!cats.length) {
     saleCategoryButtons.innerHTML = '<p>Sin categorías.</p>';
     saleCategorySelectors.innerHTML = '';
     return;
   }
   if (activeSaleCategory && !cats.includes(activeSaleCategory)) activeSaleCategory = '';
-  if (!String(saleSearchQuery || '').trim()) {
-    saleCategoryButtons.innerHTML = '';
-    cats.forEach((c) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = `secondary tab ${c === activeSaleCategory ? 'active' : ''}`;
-      b.textContent = c;
-      b.addEventListener('click', () => { activeSaleCategory = c; renderSaleSelectors(); });
-      saleCategoryButtons.appendChild(b);
-    });
-  }
-  const subOptions = activeSaleCategory ? getSaleSubCategoryOptions(activeSaleCategory) : [];
-  const rootProducts = activeSaleCategory ? getProductsForSaleSelection(activeSaleCategory, '') : [];
-  const list = String(saleSearchQuery || '').trim()
-    ? searchProducts
-    : (activeSaleCategory ? (subOptions.length === 1 && !rootProducts.length ? getProductsForSaleSelection(activeSaleCategory, subOptions[0].id) : rootProducts) : []);
-  const renderProductOptions = (items) => items.map((p) => {
-    const stock = Number(p.stockCurrent || 0);
-    const noStock = isStockEnabled() && stock <= 0;
-    const lowStock = isStockEnabled() && stock > 0 && stock <= Number(appConfig.stockMinimo || 0);
-    const suffix = isStockEnabled() ? (noStock ? ' (Sin stock)' : (lowStock ? ` (Stock = ${stock})` : '')) : '';
-    const style = isStockEnabled() ? (noStock ? 'color:#c62f2f;' : (lowStock ? 'color:#b26a00;' : '')) : '';
-    return `<option value="${p.id}" ${noStock ? 'disabled' : ''} style="${style}">${p.name}${suffix} · ${money(p.price)}</option>`;
-  }).join('');
-  saleCategorySelectors.innerHTML = `<div class="card grid4">${subOptions.length ? `<label>Subcategoría<select id="catSubCategorySel"><option value="">${rootProducts.length ? 'Productos de categoría' : 'Selecciona una subcategoría'}</option>${subOptions.map((sub) => `<option value="${sub.id}">${sub.name}</option>`).join('')}</select></label>` : ''}<label>Producto<select id="catProductSel"><option value="">Selecciona un producto</option>${renderProductOptions(list)}</select></label><label>Cantidad<input id="catQty" type="number" min="1" step="1" value="1" /></label><label>Subtotal<input id="catSub" type="text" readonly value="${money(0)}" /></label><button id="catAdd" class="primary" type="button">Añadir</button></div>`;
-  const subSel = $('catSubCategorySel');
+  saleCategoryButtons.innerHTML = '';
+  cats.forEach((c) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `secondary tab ${c === activeSaleCategory ? 'active' : ''}`;
+    b.textContent = c;
+    b.addEventListener('click', () => { activeSaleCategory = c; renderSaleSelectors(); });
+    saleCategoryButtons.appendChild(b);
+  });
+  const list = activeSaleCategory ? state.products.filter((p) => {
+    if (p.hidden || p.category !== activeSaleCategory) return false;
+    if (!isStockEnabled()) return true;
+    return Number(p.stockCurrent || 0) > 0;
+  }) : [];
+  saleCategorySelectors.innerHTML = `<div class="card grid4"><label>Producto<select id="catProductSel"><option value="">Selecciona un producto</option>${list.map((p) => { const stock = Number(p.stockCurrent || 0); const noStock = isStockEnabled() && stock <= 0; const lowStock = isStockEnabled() && stock > 0 && stock <= Number(appConfig.stockMinimo || 0); const suffix = isStockEnabled() ? (noStock ? ' (Sin stock)' : (lowStock ? ` (Stock = ${stock})` : '')) : ''; const style = isStockEnabled() ? (noStock ? 'color:#c62f2f;' : (lowStock ? 'color:#b26a00;' : '')) : ''; return `<option value="${p.id}" ${noStock ? 'disabled' : ''} style="${style}">${p.name}${suffix} · ${money(p.price)}</option>`; }).join('')}</select></label><label>Cantidad<input id="catQty" type="number" min="1" step="1" value="1" /></label><label>Subtotal<input id="catSub" type="text" readonly value="${money(0)}" /></label><button id="catAdd" class="primary" type="button">Añadir</button></div>`;
   const sel = $('catProductSel');
   const qty = $('catQty');
   const sub = $('catSub');
-  const syncProducts = () => {
-    const selectedSub = subSel ? subSel.value : (subOptions.length === 1 && !rootProducts.length ? String(subOptions[0].id || '') : '');
-    const items = String(saleSearchQuery || '').trim()
-      ? searchProducts
-      : (activeSaleCategory ? getProductsForSaleSelection(activeSaleCategory, selectedSub) : []);
-    if (sel) sel.innerHTML = `<option value="">Selecciona un producto</option>${renderProductOptions(items)}`;
-    if (sub) sub.value = money(0);
-  };
   const sync = () => {
     const p = state.products.find((x) => x.id === sel?.value);
     if (sub) sub.value = money((p?.price || 0) * Math.max(1, Number(qty?.value || 1)));
   };
-  subSel?.addEventListener('change', () => { syncProducts(); sync(); });
   sel?.addEventListener('change', sync);
   qty?.addEventListener('input', sync);
-  sync();
   $('catAdd')?.addEventListener('click', () => {
     const p = state.products.find((x) => x.id === sel?.value);
     const q = Math.max(1, Number(qty?.value || 1));
@@ -1438,85 +1891,6 @@ function ensureSalesModeButton() {
   btn.className = 'secondary';
   btn.textContent = 'Modo de ventas';
   actions.appendChild(btn);
-}
-
-function ensureGeneralCashUi() {
-  const actions = homeScreen?.querySelector('.home-actions');
-  if (actions) {
-    if (!document.getElementById('openGeneralCashBtn')) {
-      const btn = document.createElement('button');
-      btn.id = 'openGeneralCashBtn';
-      btn.type = 'button';
-      btn.className = 'secondary';
-      btn.textContent = 'Abrir caja general';
-      actions.insertBefore(btn, startCashBtn || actions.firstChild);
-    }
-    if (!document.getElementById('closeGeneralCashBtn')) {
-      const btn = document.createElement('button');
-      btn.id = 'closeGeneralCashBtn';
-      btn.type = 'button';
-      btn.className = 'secondary';
-      btn.textContent = 'Cerrar caja general';
-      actions.insertBefore(btn, startCashBtn || actions.firstChild);
-    }
-    if (!document.getElementById('homeOutflowsBtn')) {
-      const btn = document.createElement('button');
-      btn.id = 'homeOutflowsBtn';
-      btn.type = 'button';
-      btn.className = 'secondary';
-      btn.textContent = 'Entradas y salidas de caja';
-      actions.insertBefore(btn, openSettingsBtn || null);
-    }
-  }
-
-  const outflowsSection = document.getElementById('salidas');
-  if (goSalidasBtn) goSalidasBtn.textContent = 'Entradas y salidas de caja';
-  const outflowsFormCard = outflowsSection?.querySelector('.card.grid3');
-  if (outflowsFormCard && !document.getElementById('outflowCashBoxType')) {
-    const label = document.createElement('label');
-    label.innerHTML = 'Caja<select id="outflowCashBoxType"><option value="caja_dia">Caja del día</option><option value="caja_general">Caja general</option></select>';
-    outflowsFormCard.insertBefore(label, addOutflowBtn || null);
-  }
-  const outflowsHead = outflowsSection?.querySelector('table thead tr');
-  if (outflowsHead) outflowsHead.innerHTML = '<th>Fecha</th><th>Tipo</th><th>Caja</th><th>Método</th><th>Descripción</th><th>Monto</th><th>Impacto</th><th>Acciones</th>';
-
-  const resumenPanel = document.getElementById('resumen');
-  if (resumenPanel && !document.getElementById('generalCashSummaryWrap')) {
-    const wrap = document.createElement('div');
-    wrap.id = 'generalCashSummaryWrap';
-    wrap.className = 'card';
-    wrap.innerHTML = '<h3>Datos generales de caja</h3><div class="summary-grid"><div class="card"><p>Total efectivo (caja general)</p><strong id="generalCashSummaryEfectivo">Bs 0.00</strong></div><div class="card"><p>Total QR / banco (caja general)</p><strong id="generalCashSummaryQr">Bs 0.00</strong></div><div class="card"><p>Total global</p><strong id="generalCashSummaryTotal">Bs 0.00</strong></div></div>';
-    const firstChild = resumenPanel.querySelector('.summary-grid, .card');
-    resumenPanel.insertBefore(wrap, firstChild || resumenPanel.firstChild);
-  }
-
-  const cierresPanel = document.getElementById('cierres');
-  if (cierresPanel && !document.getElementById('generalCashClosingsCard')) {
-    const card = document.createElement('div');
-    card.id = 'generalCashClosingsCard';
-    card.className = 'card';
-    card.innerHTML = '<h3>Cierres generales</h3><table><thead><tr><th>Fecha inicio</th><th>Fecha fin</th><th>Efectivo</th><th>QR / banco</th><th>Total</th><th>Usuario</th></tr></thead><tbody id="generalCashClosingsTable"></tbody></table>';
-    cierresPanel.appendChild(card);
-  }
-
-  const ventasPanel = document.getElementById('ventas');
-  if (ventasPanel && !document.getElementById('saleSearchCard')) {
-    const card = document.createElement('div');
-    card.id = 'saleSearchCard';
-    card.className = 'card';
-    card.innerHTML = '<label>🔎 Buscar producto<input id="saleSearchInput" type="text" placeholder="Buscar por nombre..." /></label>';
-    ventasPanel.insertBefore(card, saleFormContainer || null);
-  }
-
-  const productListCardLocal = document.getElementById('productListCard');
-  if (productListCardLocal && !document.getElementById('productSortToolbar')) {
-    const toolbar = document.createElement('div');
-    toolbar.id = 'productSortToolbar';
-    toolbar.className = 'grid3';
-    toolbar.innerHTML = '<label>Ordenar por<select id="productSortMode"><option value="category">Categoría</option><option value="name">Producto</option><option value="price">Precio</option></select></label><button id="applyProductSortBtn" class="secondary" type="button">Ordenar</button><span class="muted">Solo afecta la vista.</span>';
-    const table = productListCardLocal.querySelector('table');
-    productListCardLocal.insertBefore(toolbar, table || null);
-  }
 }
 
 function openSalesModeScreen() {
@@ -1588,39 +1962,11 @@ function renderTouchSaleUi() {
   }
   const cfg = getTouchUiConfig();
   const cap = touchGridCapacity();
-  const cats = [...new Set(state.products.filter((p) => !p.hidden).map((p) => p.category))];
-  const searchQuery = String(saleSearchQuery || '').trim().toLowerCase();
-  state.touchUiState = state.touchUiState || { view: 'categories', category: '', subcategoryId: '', page: 0 };
+  const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
+  state.touchUiState = state.touchUiState || { view: 'categories', category: '', page: 0 };
   const ui = state.touchUiState;
-  if (!cats.includes(ui.category)) {
-    ui.category = '';
-    ui.subcategoryId = '';
-    ui.view = 'categories';
-    ui.page = 0;
-  }
-  const subOptions = ui.category ? getSaleSubCategoryOptions(ui.category) : [];
-  if (ui.view === 'subcategories' && !ui.category) {
-    ui.view = 'categories';
-    ui.page = 0;
-  }
-  if (ui.view === 'products') {
-    const validSub = subOptions.some((sub) => String(sub.id || '') === String(ui.subcategoryId || ''));
-    const validRoot = String(ui.subcategoryId || '') === '__root__' && getProductsForSaleSelection(ui.category, '').length > 0;
-    if (!validSub && !validRoot) {
-      ui.subcategoryId = '';
-      ui.view = subOptions.length > 1 ? 'subcategories' : 'products';
-      ui.page = 0;
-    }
-  }
-  const hasRootProducts = ui.category ? getProductsForSaleSelection(ui.category, '').length > 0 : false;
-  const subcategoryCards = hasRootProducts ? [{ id: '__root__', name: 'Productos de categoría', image: '' }, ...subOptions] : subOptions;
-  const list = searchQuery
-    ? getSaleSearchProducts()
-    : (ui.view === 'categories'
-      ? cats
-      : (ui.view === 'subcategories'
-        ? subcategoryCards
-        : getProductsForSaleSelection(ui.category, ui.subcategoryId === '__root__' ? '' : (ui.subcategoryId || (subOptions.length === 1 && !hasRootProducts ? subOptions[0].id : '')))));
+  if (!cats.includes(ui.category)) { ui.category = ''; ui.view = 'categories'; ui.page = 0; }
+  const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || Number(p.stockCurrent || 0) > 0);
   const pages = Math.max(1, Math.ceil(list.length / cap));
   if (ui.page >= pages) ui.page = 0;
   const pageItems = list.slice(ui.page * cap, (ui.page + 1) * cap);
@@ -1631,12 +1977,6 @@ function renderTouchSaleUi() {
       const img = categorySrc ? `<img class=\"touch-media\" src=\"${categorySrc}\" alt=\"${item}\" loading=\"lazy\" />` : '';
       return `<button class="touch-card ${hasImg ? 'with-image' : 'no-image'}" data-touch-cat="${item}" type="button">${img}<strong class="touch-card-title">${item}</strong></button>`;
     }
-    if (ui.view === 'subcategories') {
-      const hasImg = Boolean(item.image);
-      const subSrc = resolveImageSource(item.image || '');
-      const img = subSrc ? `<img class=\"touch-media\" src=\"${subSrc}\" alt=\"${item.name}\" loading=\"lazy\" />` : '';
-      return `<button class="touch-card ${hasImg ? 'with-image' : 'no-image'}" data-touch-subcat="${item.id}" type="button">${img}<strong class="touch-card-title">${item.name}</strong></button>`;
-    }
     const productSrc = resolveImageSource(item.imageUrl || item.imageDataUrl);
     const hasImg = Boolean(productSrc);
     const img = productSrc ? `<img class=\"touch-media\" src=\"${productSrc}\" alt=\"${item.name}\" loading=\"lazy\" />` : '';
@@ -1645,48 +1985,13 @@ function renderTouchSaleUi() {
     const stockBadge = lowStock ? `<small class=\"stock-warning\">Stock: ${stock}</small>` : '';
     return `<button class="touch-card ${hasImg ? 'with-image' : 'no-image'} ${lowStock ? 'stock-empty' : ''}" data-touch-prod="${item.id}" type="button">${img}<strong class="touch-card-title">${item.name}</strong><span class="touch-card-price">${money(item.price)}</span>${stockBadge}</button>`;
   };
-  const backButton = searchQuery
-    ? '<button id="touchBackBtn" class="secondary" type="button">Limpiar búsqueda</button>'
-    : (ui.view === 'products'
-    ? '<button id="touchBackBtn" class="secondary" type="button">Volver a subcategorías</button>'
-    : (ui.view === 'subcategories' ? '<button id="touchBackBtn" class="secondary" type="button">Volver a categorías</button>' : '<span></span>'));
   host.className = `touch-sales-layout cart-${cfg.cartPosition}`;
-  host.innerHTML = `<div class="touch-main"><div class="touch-toolbar">${backButton}<div class="touch-pager"><button id="touchPrevPage" class="secondary" type="button">◀</button><span>Página ${ui.page + 1}/${pages}</span><button id="touchNextPage" class="secondary" type="button">▶</button></div></div><div class="touch-grid" style="--touch-cols:${getTouchUiConfig().grid.split('x')[0]};">${pageItems.map(renderCard).join('')}</div></div><aside class="touch-cart"><h3>Lista de compras</h3><div class="touch-cart-items">${state.currentCart.length ? state.currentCart.map((i) => `<div class="touch-cart-item"><div><strong>${i.name}</strong><small>${money(i.price)} c/u · Total ${money(Number(i.finalSubtotal ?? (i.price*i.qty)))}</small></div><div class="touch-qty"><button data-touch-dec="${i.id}" type="button">-</button><span>${i.qty}</span><button data-touch-inc="${i.id}" type="button">+</button><button data-touch-tools="${i.id}" type="button">🛠</button><button data-touch-rm="${i.id}" type="button">✕</button></div></div>`).join('') : '<p>Sin productos añadidos.</p>'}</div><div class="touch-summary"><p>Subtotal: ${money(saleTotals().gross)}</p><p>Descuento: ${money(saleTotals().discount)}</p><p><strong>Total: ${money(saleTotals().final)}</strong></p></div><button id="touchProceedPayBtn" class="primary" type="button">Proceder con el pago</button><div class="grid2"><button id="touchQueueBtn" class="secondary" type="button">Añadir a la cola</button><button id="touchQueuedBtn" class="secondary" type="button">Ver pedidos pendientes</button></div><div class="touch-finance"><small>Total de caja: ${cashTotalBox?.textContent || money(0)}</small><small>Cambio final más efectivo del día: ${summaryFinalCash?.textContent || money(0)}</small><small>Total de QR del día: ${summaryFinalQr?.textContent || money(0)}</small></div></aside>`;
+  host.innerHTML = `<div class="touch-main"><div class="touch-toolbar">${ui.view === 'products' ? '<button id="touchBackToCats" class="secondary" type="button">Volver a categorías</button>' : '<span></span>'}<div class="touch-pager"><button id="touchPrevPage" class="secondary" type="button">◀</button><span>Página ${ui.page + 1}/${pages}</span><button id="touchNextPage" class="secondary" type="button">▶</button></div></div><div class="touch-grid" style="--touch-cols:${getTouchUiConfig().grid.split('x')[0]};">${pageItems.map(renderCard).join('')}</div></div><aside class="touch-cart"><h3>Lista de compras</h3><div class="touch-cart-items">${state.currentCart.length ? state.currentCart.map((i) => `<div class="touch-cart-item"><div><strong>${i.name}</strong><small>${money(i.price)} c/u · Total ${money(Number(i.finalSubtotal ?? (i.price*i.qty)))}</small></div><div class="touch-qty"><button data-touch-dec="${i.id}" type="button">-</button><span>${i.qty}</span><button data-touch-inc="${i.id}" type="button">+</button><button data-touch-tools="${i.id}" type="button">🛠</button><button data-touch-rm="${i.id}" type="button">✕</button></div></div>`).join('') : '<p>Sin productos añadidos.</p>'}</div><div class="touch-summary"><p>Subtotal: ${money(saleTotals().gross)}</p><p>Descuento: ${money(saleTotals().discount)}</p><p><strong>Total: ${money(saleTotals().final)}</strong></p></div><button id="touchProceedPayBtn" class="primary" type="button">Proceder con el pago</button><div class="grid2"><button id="touchQueueBtn" class="secondary" type="button">Añadir a la cola</button><button id="touchQueuedBtn" class="secondary" type="button">Ver pedidos pendientes</button></div><div class="touch-finance"><small>Total de caja: ${cashTotalBox?.textContent || money(0)}</small><small>Cambio final más efectivo del día: ${summaryFinalCash?.textContent || money(0)}</small><small>Total de QR del día: ${summaryFinalQr?.textContent || money(0)}</small></div></aside>`;
 
-  host.querySelector('#touchBackBtn')?.addEventListener('click', () => {
-    if (searchQuery) {
-      saleSearchQuery = '';
-    } else if (ui.view === 'products') {
-      ui.view = subOptions.length > 1 ? 'subcategories' : 'categories';
-      if (ui.view === 'categories') {
-        ui.category = '';
-        ui.subcategoryId = '';
-      }
-    } else {
-      ui.view = 'categories';
-      ui.category = '';
-      ui.subcategoryId = '';
-    }
-    ui.page = 0;
-    renderTouchSaleUi();
-  });
+  host.querySelector('#touchBackToCats')?.addEventListener('click', () => { ui.view = 'categories'; ui.page = 0; renderTouchSaleUi(); });
   host.querySelector('#touchPrevPage')?.addEventListener('click', () => { ui.page = (ui.page - 1 + pages) % pages; renderTouchSaleUi(); });
   host.querySelector('#touchNextPage')?.addEventListener('click', () => { ui.page = (ui.page + 1) % pages; renderTouchSaleUi(); });
-  host.querySelectorAll('[data-touch-cat]').forEach((b) => b.addEventListener('click', () => {
-    ui.category = b.dataset.touchCat || '';
-    const nextSubOptions = getSaleSubCategoryOptions(ui.category);
-    const hasCategoryProducts = getProductsForSaleSelection(ui.category, '').length > 0;
-    ui.subcategoryId = nextSubOptions.length === 1 && !hasCategoryProducts ? String(nextSubOptions[0].id || '') : '';
-    ui.view = nextSubOptions.length > 0 ? 'subcategories' : 'products';
-    ui.page = 0;
-    renderTouchSaleUi();
-  }));
-  host.querySelectorAll('[data-touch-subcat]').forEach((b) => b.addEventListener('click', () => {
-    ui.subcategoryId = b.dataset.touchSubcat || '';
-    ui.view = 'products';
-    ui.page = 0;
-    renderTouchSaleUi();
-  }));
+  host.querySelectorAll('[data-touch-cat]').forEach((b) => b.addEventListener('click', () => { ui.view = 'products'; ui.category = b.dataset.touchCat || ''; ui.page = 0; renderTouchSaleUi(); }));
   host.querySelectorAll('[data-touch-prod]').forEach((b) => b.addEventListener('click', () => {
     const p = state.products.find((x) => x.id === b.dataset.touchProd);
     if (!p) return;
@@ -1698,7 +2003,6 @@ function renderTouchSaleUi() {
     item.finalSubtotal = total - (total * (item.discountPct || 0) / 100);
     ui.view = 'categories';
     ui.category = '';
-    ui.subcategoryId = '';
     ui.page = 0;
     renderCart();
     renderTouchSaleUi();
@@ -1732,6 +2036,59 @@ function syncSaleUiModeVisibility() {
   setSaleModeDomVisibility();
 }
 
+function openImageDb() {
+  if (imageDbPromise) return imageDbPromise;
+  imageDbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(IMAGE_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IMAGE_DB_STORE)) db.createObjectStore(IMAGE_DB_STORE);
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onclose = () => { imageDbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => {
+      imageDbPromise = null;
+      reject(req.error || new Error('No se pudo abrir IndexedDB de imágenes.'));
+    };
+  });
+  return imageDbPromise;
+}
+
+async function imageDbPut(key, blob) {
+  const db = await openImageDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_DB_STORE, 'readwrite');
+    tx.objectStore(IMAGE_DB_STORE).put(blob, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('Error guardando imagen en IndexedDB.'));
+  });
+}
+
+async function imageDbGet(key) {
+  const db = await openImageDb();
+  const out = await new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_DB_STORE, 'readonly');
+    const req = tx.objectStore(IMAGE_DB_STORE).get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error || new Error('Error leyendo imagen de IndexedDB.'));
+  });
+  return out;
+}
+
+async function imageDbDelete(key) {
+  if (!key) return;
+  const db = await openImageDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_DB_STORE, 'readwrite');
+    tx.objectStore(IMAGE_DB_STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('Error eliminando imagen de IndexedDB.'));
+  });
+}
+
 function scheduleImageUiRefresh({ products = false, touch = false } = {}) {
   if (scheduledImageUiRefresh) return;
   scheduledImageUiRefresh = window.requestAnimationFrame(() => {
@@ -1741,24 +2098,26 @@ function scheduleImageUiRefresh({ products = false, touch = false } = {}) {
   });
 }
 
-function imageRefKey(_value) { return ''; }
+function imageRefKey(value) {
+  return String(value || '').startsWith('idb:') ? String(value).slice(4) : '';
+}
 
 function clearImageMissingRef(value) {
   const raw = String(value || '');
-  if (!raw) return;
+  if (!raw || !raw.startsWith('idb:')) return;
   delete imageMissingRefs[raw];
 }
 
 function markImageMissingRef(value) {
   const raw = String(value || '');
-  if (!raw) return;
+  if (!raw || !raw.startsWith('idb:')) return;
   const prev = imageMissingRefs[raw] || { attempts: 0, lastAttemptAt: 0, missing: false };
   imageMissingRefs[raw] = { missing: true, attempts: Number(prev.attempts || 0) + 1, lastAttemptAt: Date.now() };
 }
 
 function forceRetryImageRef(value) {
   const raw = String(value || '');
-  if (!raw) return;
+  if (!raw || !raw.startsWith('idb:')) return;
   clearImageMissingRef(raw);
   delete imageLoadInFlight[raw];
   resolveImageSource(raw);
@@ -1916,8 +2275,6 @@ function openImageUploadForProduct(productId) {
         setTimeout(() => setImageUploadStatus('product', productId, null), 2400);
       }
       renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
       renderSaleSelectors();
       renderTouchSaleUi();
     });
@@ -1956,8 +2313,6 @@ function openImageUploadForCategory(categoryName) {
         setTimeout(() => setImageUploadStatus('category', categoryName, null), 2400);
       }
       renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
       renderTouchSaleUi();
     });
   });
@@ -1967,7 +2322,7 @@ function openImageUploadForCategory(categoryName) {
 function renderOrders(finalized = false) {
   if (!ordersTable) return;
   const q = (orderSearchInput?.value || '').trim();
-  const base = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt).slice();
+  const base = salesForActiveCashBox().filter((sale) => isCountableActiveSale(sale)).slice();
   let pending = base.filter((s) => s.orderStatus !== 'finalizado');
   let done = base.filter((s) => s.orderStatus === 'finalizado');
   if (q) {
@@ -2070,61 +2425,29 @@ function applySettings() {
       billingLogoCurrentText.textContent = 'Logo actual: No configurado';
     }
   }
-  if (cloudProviderInput) cloudProviderInput.value = state.settings.cloudProvider || 'firebase';
-  if (firebaseDbUrlInput) firebaseDbUrlInput.value = state.settings.firebaseDbUrl || '';
-  if (firebaseDbTokenInput) firebaseDbTokenInput.value = state.settings.firebaseDbToken || '';
-  if (firebaseDbPathInput) firebaseDbPathInput.value = state.settings.firebaseDbPath || SHARED_DB_PATH;
-  if (cloudRootUrlInput) cloudRootUrlInput.value = state.settings.cloudRootUrl || '';
-  if (cloudAuthTypeInput) cloudAuthTypeInput.value = state.settings.cloudAuthType || 'firebase_query';
-  if (cloudAuthHeaderInput) cloudAuthHeaderInput.value = state.settings.cloudAuthHeader || 'Authorization';
-  if (cloudAuthQueryKeyInput) cloudAuthQueryKeyInput.value = state.settings.cloudAuthQueryKey || 'auth';
-  refreshDatabaseConfigUi();
   renderBillingPreview();
   if (state.settings.logoDataUrl && homeLogo && logoPlaceholder) {
+    console.info('[settings][logo-apply]', { target: 'home', hasLogo: true });
     homeLogo.src = state.settings.logoDataUrl;
     homeLogo.classList.remove('hidden');
     logoPlaceholder.classList.add('hidden');
   }
   if (state.settings.logoDataUrl && posHeaderLogo) {
+    console.info('[settings][logo-apply]', { target: 'pos', hasLogo: true });
     posHeaderLogo.src = state.settings.logoDataUrl;
     posHeaderLogo.classList.remove('hidden');
   }
-}
-
-function saveDatabaseSettings() {
-  if (!state.settings || typeof state.settings !== 'object') state.settings = {};
-  const provider = String(cloudProviderInput?.value || 'firebase').trim().toLowerCase();
-  state.settings.cloudProvider = ['firebase', 'custom'].includes(provider) ? provider : 'firebase';
-  state.settings.firebaseDbUrl = String(firebaseDbUrlInput?.value || '').trim() || defaultCloudConfig.firebaseDbUrl;
-  state.settings.firebaseDbToken = String(firebaseDbTokenInput?.value || '').trim();
-  state.settings.firebaseDbPath = String(firebaseDbPathInput?.value || '').trim() || SHARED_DB_PATH;
-  state.settings.cloudRootUrl = String(cloudRootUrlInput?.value || '').trim();
-  state.settings.cloudAuthType = String(cloudAuthTypeInput?.value || 'firebase_query').trim().toLowerCase();
-  state.settings.cloudAuthHeader = String(cloudAuthHeaderInput?.value || 'Authorization').trim() || 'Authorization';
-  const defaultQueryKey = state.settings.cloudProvider === 'firebase' ? 'auth' : 'token';
-  state.settings.cloudAuthQueryKey = String(cloudAuthQueryKeyInput?.value || defaultQueryKey).trim() || defaultQueryKey;
-  if (state.settings.cloudProvider === 'firebase') {
-    state.settings.cloudAuthType = 'firebase_query';
-    state.settings.cloudAuthQueryKey = state.settings.cloudAuthQueryKey || 'auth';
-  }
-  normalizeCloudSettings();
-  persist();
-  refreshDatabaseConfigUi();
-  if (syncStatus) syncStatus.textContent = 'Configuración de base de datos guardada.';
+  console.info('[settings][logo-render]', { hasLogo: Boolean(state.settings.logoDataUrl), homeHidden: homeLogo?.classList.contains('hidden'), posHidden: posHeaderLogo?.classList.contains('hidden') });
 }
 
 function renderCashStatus() {
   if (!cashStatus) return;
   const activeCash = getActiveCashBox();
-  const general = state.generalCash || {};
-  const generalStatus = isGeneralCashOpen()
-    ? `Caja general ABIERTA · Efectivo ${money(general.efectivo || 0)} · QR ${money(general.qr || 0)}`
-    : 'Caja general CERRADA';
   if (!activeCash) {
-    cashStatus.textContent = `${generalStatus}. Caja del día cerrada.`;
+    cashStatus.textContent = 'Caja cerrada. No hay caja activa.';
     return;
   }
-  cashStatus.textContent = `${generalStatus}. Caja del día ABIERTA desde ${new Date(activeCash.fecha_apertura).toLocaleString()} por ${activeCash.usuario_apertura}. Monto inicial: ${money(activeCash.openingCash || 0)}.`;
+  cashStatus.textContent = `Caja ABIERTA desde ${new Date(activeCash.fecha_apertura).toLocaleString()} por ${activeCash.usuario_apertura}. Monto inicial: ${money(activeCash.openingCash || 0)}.`;
 }
 
 function formatDurationMs(ms) {
@@ -2229,16 +2552,23 @@ async function downloadClosingPdf(closingId) {
     ];
     doc.autoTable({ startY: y0 + 18, head: [['Información general', 'Valor']], body: general, theme: 'grid' });
     const fy = doc.lastAutoTable.finalY + 4;
+    const debtPayments = Array.isArray(closing.debtPaymentsSnapshot) ? closing.debtPaymentsSnapshot.filter((p) => !p?.anulado) : [];
+    const debtCash = debtPayments.reduce((sum, pay) => sum + Number(pay.cashAmount || (pay.method === 'efectivo' ? pay.amount : 0) || 0), 0);
+    const debtQr = debtPayments.reduce((sum, pay) => sum + Number(pay.qrAmount || (pay.method === 'qr' ? pay.amount : 0) || 0), 0);
+    const totalCash = Number(closing.cashIn || 0) + debtCash;
+    const totalQr = Number(closing.qrIn || 0) + debtQr;
     const fin = [
       ['Monto inicial', money(agg.opening)],
-      ['Total ventas brutas', money(agg.net)],
+      ['Ventas registradas', money(Number(closing.cashIn || 0) + Number(closing.qrIn || 0))],
+      ['Pagos de deuda recibidos', money(debtCash + debtQr)],
+      ['Total ventas brutas', money(agg.net + debtCash + debtQr)],
       ['Total descuentos', money(Number(closing.discountTotal || 0))],
-      ['Total ingresos netos', money(agg.net)],
-      ['Total efectivo', money(agg.cash)],
-      ['Total QR', money(agg.qr)],
+      ['Total ingresos netos', money(agg.net + debtCash + debtQr)],
+      ['Total efectivo', money(totalCash)],
+      ['Total QR', money(totalQr)],
       ['Total salidas', money(agg.outTotal)],
       ['Total entradas', money(agg.inTotal)],
-      ['Total esperado', money(agg.expected)],
+      ['Total esperado', money(agg.expected + debtCash)],
       ['Total contado', money(agg.counted)]
     ];
     doc.autoTable({ startY: fy, head: [['Resumen financiero', 'Valor']], body: fin, theme: 'grid' });
@@ -2256,10 +2586,10 @@ async function downloadClosingPdf(closingId) {
     const py = doc.lastAutoTable.finalY + 4;
     const totalNet = Math.max(1, agg.net);
     const mpay = [
-      ['Efectivo', `${money(agg.cash)} (${((agg.cash/totalNet)*100).toFixed(1)}%)`],
-      ['Transferencia', `${money(agg.transfer)} (${((agg.transfer/totalNet)*100).toFixed(1)}%)`],
-      ['QR', `${money(agg.qr)} (${((agg.qr/totalNet)*100).toFixed(1)}%)`],
-      ['Otros', `${money(agg.others)} (${((agg.others/totalNet)*100).toFixed(1)}%)`]
+      ['Efectivo', `${money(totalCash)} (${((totalCash/Math.max(1,totalCash + totalQr + agg.transfer + agg.others))*100).toFixed(1)}%)`],
+      ['Transferencia', `${money(agg.transfer)} (${((agg.transfer/Math.max(1,totalCash + totalQr + agg.transfer + agg.others))*100).toFixed(1)}%)`],
+      ['QR', `${money(totalQr)} (${((totalQr/Math.max(1,totalCash + totalQr + agg.transfer + agg.others))*100).toFixed(1)}%)`],
+      ['Otros', `${money(agg.others)} (${((agg.others/Math.max(1,totalCash + totalQr + agg.transfer + agg.others))*100).toFixed(1)}%)`]
     ];
     doc.autoTable({ startY: py, head: [['Método', 'Monto']], body: mpay, theme: 'grid' });
     const movementRows = (closing.outflowsSnapshot || []).map((m) => [
@@ -2286,6 +2616,18 @@ async function downloadClosingPdf(closingId) {
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['DETALLE DE ENTRADAS', '', '', '', '', '']], body: entriesRows.length ? entriesRows : [['Sin entradas.', '', '', '', '', '']], theme: 'grid' });
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 3, head: [['DETALLE DE SALIDAS', '', '', '', '', '']], body: exitsRows.length ? exitsRows : [['Sin salidas.', '', '', '', '', '']], theme: 'grid' });
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 3, head: [['VENTAS POR USUARIO', '', '']], body: userSalesRows.length ? userSalesRows : [['Sin ventas por usuario.', '', '']], theme: 'grid' });
+    const debtPaymentRows = debtPayments.map((pay) => {
+      const sale = saleRecordForPayment(pay);
+      const person = state.people.find((x) => x.id === pay.debtorId);
+      return [
+        new Date(pay.paidAt || closing.closedAt).toLocaleString(),
+        personFullName(person) || '-',
+        sale?.items?.map((item) => `${item.name} x${item.qty}`).join(', ') || '-',
+        pay.method || '-',
+        money(pay.amount || 0),
+        pay.paidBy || '-'
+      ];
+    });
     const historyRows = closingSalesHistoryRows(closing).map((sale) => [
       new Date(sale.createdAt || sale.deletedAt).toLocaleString(),
       `#${orderNumberLabel(sale.orderNumber)}`,
@@ -2295,7 +2637,8 @@ async function downloadClosingPdf(closingId) {
       sale.statusLabel || sale.status || 'OK'
     ]);
     doc.addPage();
-    doc.autoTable({ startY: 12, head: [['HISTORIAL DE VENTAS DE CIERRE', '', '', '', '', '']], body: historyRows.length ? historyRows : [['Sin historial de ventas.', '', '', '', '', '']], theme: 'grid', didParseCell: (hook) => {
+    doc.autoTable({ startY: 12, head: [['PAGOS DE DEUDA', '', '', '', '', '']], body: debtPaymentRows.length ? debtPaymentRows : [['Sin pagos de deuda.', '', '', '', '', '']], theme: 'grid' });
+    doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['HISTORIAL DE VENTAS DE CIERRE', '', '', '', '', '']], body: historyRows.length ? historyRows : [['Sin historial de ventas.', '', '', '', '', '']], theme: 'grid', didParseCell: (hook) => {
       if (hook.section !== 'body') return;
       const cellText = String(hook.row?.raw?.[5] || '');
       if (cellText.includes('ANULADA')) {
@@ -2322,6 +2665,63 @@ function ensureClosingsStatsUI() {
 
 function activeClosingsList() {
   return (state.cashClosings || []).slice().sort((a,b)=>new Date(b.closedAt)-new Date(a.closedAt));
+}
+
+function resetCashClosingsSearch({ render = true } = {}) {
+  state.cashClosings = [];
+  state.cashClosingsLoaded = false;
+  state.cashClosingsSearchMonth = '';
+  if (cashClosingsTable) cashClosingsTable.innerHTML = '<tr><td colspan="14">Selecciona un mes y presiona Buscar.</td></tr>';
+  if (render) renderCashClosings();
+}
+
+async function saveCashClosingToCloud(closing) {
+  if (!closing?.id || !state.settings?.firebaseDbUrl) return;
+  await ensureCloudSeedData();
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  const stamp = Date.now();
+  for (const includeToken of authModes) {
+    try {
+      await cloudWritePath(`history/cashClosings/${encodeURIComponent(String(closing.id))}`, closing, { includeToken, method: 'PUT' });
+      await cloudWritePath('history/updatedAt', stamp, { includeToken, method: 'PUT' });
+      return;
+    } catch (err) {
+      if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+      throw err;
+    }
+  }
+}
+
+async function searchCashClosingsByMonth(month) {
+  if (!month || !state.settings?.firebaseDbUrl) {
+    state.cashClosings = [];
+    state.cashClosingsLoaded = true;
+    state.cashClosingsSearchMonth = month || '';
+    renderCashClosings();
+    return [];
+  }
+  await ensureCloudSeedData();
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  let rawClosings = {};
+  for (const includeToken of authModes) {
+    try {
+      rawClosings = await cloudReadPath('history/cashClosings', { includeToken }) || {};
+      break;
+    } catch (err) {
+      if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+      throw err;
+    }
+  }
+  const list = normalizeCollectionToArray(rawClosings)
+    .filter((closing) => String(closing?.closedAt || '').slice(0, 7) === month)
+    .sort((a, b) => new Date(b.closedAt || 0) - new Date(a.closedAt || 0));
+  state.cashClosings = list;
+  state.cashClosingsLoaded = true;
+  state.cashClosingsSearchMonth = month;
+  renderCashClosings();
+  return list;
 }
 
 function openSelectClosingsModal() {
@@ -2504,15 +2904,11 @@ async function downloadClosingsStatsPdf() {
 function renderCashClosings() {
   if (!cashClosingsTable) return;
   ensureClosingsStatsUI();
-  const generalTable = document.getElementById('generalCashClosingsTable');
-  if (generalTable) {
-    const generalList = (state.generalClosings || []).slice().sort((a, b) => new Date(b.fecha_fin || 0) - new Date(a.fecha_fin || 0));
-    generalTable.innerHTML = generalList.length
-      ? generalList.map((closing) => `<tr><td>${closing.fecha_inicio ? new Date(closing.fecha_inicio).toLocaleString() : '-'}</td><td>${closing.fecha_fin ? new Date(closing.fecha_fin).toLocaleString() : '-'}</td><td>${money(closing.efectivo || 0)}</td><td>${money(closing.qr || 0)}</td><td>${money(closing.total || 0)}</td><td>${closing.usuario || '-'}</td></tr>`).join('')
-      : '<tr><td colspan="6">Sin cierres generales.</td></tr>';
+  if (!state.cashClosingsLoaded) {
+    cashClosingsTable.innerHTML = '<tr><td colspan="14">Selecciona un mes y presiona Buscar.</td></tr>';
+    return;
   }
-  const month = closingsMonthFilter?.value || '';
-  const list = month ? state.cashClosings.filter((c) => c.closedAt?.slice(0, 7) === month) : state.cashClosings;
+  const list = state.cashClosings || [];
   cashClosingsTable.innerHTML = '';
   if (!list.length) {
     cashClosingsTable.innerHTML = '<tr><td colspan="14">No hay cierres para el filtro seleccionado.</td></tr>';
@@ -2523,10 +2919,12 @@ function renderCashClosings() {
     const inCash = (c.outflowsSnapshot || []).filter((m) => m.direction === 'entrada' && m.method === 'efectivo').reduce((a,m)=>a+Number(m.amount||0),0);
     const outQr = (c.outflowsSnapshot || []).filter((m) => m.direction === 'salida' && m.method === 'qr').reduce((a,m)=>a+Number(m.amount||0),0);
     const inQr = (c.outflowsSnapshot || []).filter((m) => m.direction === 'entrada' && m.method === 'qr').reduce((a,m)=>a+Number(m.amount||0),0);
-    const finalCash = Number(c.openingCash || 0) + Number(c.cashIn || 0) - outCash + inCash;
-    const finalQr = Number(c.qrIn || 0) - outQr + inQr;
+    const debtCashIn = Number(c.debtCashIn || 0);
+    const debtQrIn = Number(c.debtQrIn || 0);
+    const finalCash = Number(c.openingCash || 0) + Number(c.cashIn || 0) + debtCashIn - outCash + inCash;
+    const finalQr = Number(c.qrIn || 0) + debtQrIn - outQr + inQr;
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${new Date(c.closedAt).toLocaleString()}</td><td>${money(c.openingCash)}</td><td>${money(c.cashIn)}</td><td>${money(c.qrIn)}</td><td>${money(c.debtPending || 0)}</td><td>${money(outCash)}</td><td>${money(inCash)}</td><td>${money(outQr)}</td><td>${money(inQr)}</td><td>${money(finalCash)}</td><td>${money(finalQr)}</td><td>${c.salesCount || 0}</td><td><button class="secondary" data-closing-id="${c.id}" type="button">Ver detalle</button> <button class="secondary" data-closing-pdf="${c.id}" type="button">PDF</button></td><td>${hasPermission('deleteClosings') ? `<button class="secondary" data-closing-del="${c.id}" type="button">Eliminar</button>` : '-'}</td>`;
+    tr.innerHTML = `<td>${new Date(c.closedAt).toLocaleString()}</td><td>${money(c.openingCash)}</td><td>${money(Number(c.cashIn || 0) + debtCashIn)}</td><td>${money(Number(c.qrIn || 0) + debtQrIn)}</td><td>${money(c.debtPending || 0)}</td><td>${money(outCash)}</td><td>${money(inCash)}</td><td>${money(outQr)}</td><td>${money(inQr)}</td><td>${money(finalCash)}</td><td>${money(finalQr)}</td><td>${c.salesCount || 0}</td><td><button class="secondary" data-closing-id="${c.id}" type="button">Ver detalle</button> <button class="secondary" data-closing-pdf="${c.id}" type="button">PDF</button></td><td>${hasPermission('deleteClosings') ? `<button class="secondary" data-closing-del="${c.id}" type="button">Eliminar</button>` : '-'}</td>`;
     tr.dataset.closingNumber = String(idx + 1);
     cashClosingsTable.appendChild(tr);
   });
@@ -2558,6 +2956,7 @@ function renderClosingDetails(closingId) {
   const debtPayments = Array.isArray(closing.debtPaymentsSnapshot) ? closing.debtPaymentsSnapshot.filter((p) => !p?.anulado) : [];
   const debtCash = debtPayments.reduce((a, p) => a + Number(p.cashAmount || (p.method === 'efectivo' ? p.amount : 0) || 0), 0);
   const debtQr = debtPayments.reduce((a, p) => a + Number(p.qrAmount || (p.method === 'qr' ? p.amount : 0) || 0), 0);
+  const debtCollected = debtCash + debtQr;
   const totalCash = Number(closing.cashIn || 0) + debtCash;
   const totalQr = Number(closing.qrIn || 0) + debtQr;
   const openingCash = Number(closing.openingCash || 0);
@@ -2571,7 +2970,7 @@ function renderClosingDetails(closingId) {
   const closingHistoryRows = closingHistory.length
     ? closingHistory.map((sale) => `<tr style="${sale.status === 'ANULADA' ? 'color:#c1121f;font-weight:700;' : ''}"><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${sale.payment || '-'}</td><td>${money(sale.total)}</td><td>${sale.user || '-'}</td><td>${sale.statusLabel || sale.status}</td></tr>`).join('')
     : '<tr><td colspan="6">Sin historial de ventas.</td></tr>';
-  if (closingSummaryText) closingSummaryText.innerHTML = `<div class="card"><h4>SECCIÓN 1 – INFORMACIÓN GENERAL</h4><p>Número de cierre: ${String(closing.id || '-').slice(-8)}</p><p>Fecha de apertura: ${openAt.toLocaleDateString()}</p><p>Hora de apertura: ${openAt.toLocaleTimeString()}</p><p>Fecha de cierre: ${closeAt.toLocaleDateString()}</p><p>Hora de cierre: ${closeAt.toLocaleTimeString()}</p><p>Usuario que abrió: ${closing.usuario_apertura || '-'}</p><p>Usuario que cerró: ${closing.usuario_cierre || '-'}</p><p>Tiempo total de caja abierta: ${formatDurationMs(closeAt - openAt)}</p></div><div class="card"><h4>Detalle para enviar</h4><p>Cambio inicial: ${money(openingCash)}</p><p>Valor efectivo de ventas: ${money(totalCash)}</p><p>Valor QR de ventas: ${money(totalQr)}</p><p>Salida efectivo: ${money(outCash)}</p><p>Entrada efectivo: ${money(inCash)}</p><p>Salida QR: ${money(outQr)}</p><p>Entrada QR: ${money(inQr)}</p><p>Valor final en caja: ${money(totalInBox)}</p><p>Valor final descontando cambio inicial: ${money(realDelivered)}</p></div><div class="card"><h4>SECCIÓN 2 – RESUMEN FINANCIERO</h4><p>Inicio de caja: ${money(openingCash)}</p><p>Total ventas brutas: ${money(grossSales)}</p><p>Total descuentos: ${money(totalDiscounts)}</p><p>Total ingresos netos: ${money(grossSales - totalDiscounts)}</p><p>Total en efectivo: ${money(totalCash)}</p><p>Total QR: ${money(totalQr)}</p><p>Total salidas externas efectivo: ${money(outCash)}</p><p>Total salidas externas QR: ${money(outQr)}</p><p>Total entradas externas efectivo: ${money(inCash)}</p><p>Total entradas externas QR: ${money(inQr)}</p><p>Total efectivo final: ${money(totalCashFinal)}</p><p>Total QR final: ${money(totalQrFinal)}</p><p>Valor total en caja (incluye valor de caja): ${money(totalInBox)}</p><p>Valor efectivo real de venta entregado: ${money(realDelivered)}</p></div><div class="card"><h4>Productos vendidos</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Total</th></tr></thead><tbody>${agg.products.length ? agg.products.map((row) => `<tr><td>${row.name}</td><td>${row.qty}</td><td>${money(row.total)}</td></tr>`).join('') : '<tr><td colspan="3">Sin productos vendidos.</td></tr>'}</tbody></table></div><div class="card"><h4>HISTORIAL DE VENTAS DE CIERRE</h4><table><thead><tr><th>Fecha</th><th>Nro pedido</th><th>Método</th><th>Total</th><th>Usuario</th><th>Estado</th></tr></thead><tbody>${closingHistoryRows}</tbody></table></div><div class="card"><h4>SECCIÓN 3 – MÉTRICAS OPERATIVAS</h4><p>Cantidad total de ventas: ${closing.salesCount || sales.length}</p><p>Total productos vendidos: ${agg.qtyTotal}</p><p>Ticket promedio: ${money(agg.avgTicket)}</p><p>Venta más alta: ${money(agg.saleMax)}</p><p>Venta más baja: ${money(agg.saleMin)}</p><p>Ventas eliminadas: ${deletedCount} · Mov. caja: ${outflowCount} · Pagos deuda: ${debtPaymentsCount}</p></div><div class="card"><h4>Detalle de entradas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${entries.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin entradas.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de salidas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${exits.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin salidas.</td></tr>'}</tbody></table></div>`;
+  if (closingSummaryText) closingSummaryText.innerHTML = `<div class="card"><h4>SECCIÓN 1 – INFORMACIÓN GENERAL</h4><p>Número de cierre: ${String(closing.id || '-').slice(-8)}</p><p>Fecha de apertura: ${openAt.toLocaleDateString()}</p><p>Hora de apertura: ${openAt.toLocaleTimeString()}</p><p>Fecha de cierre: ${closeAt.toLocaleDateString()}</p><p>Hora de cierre: ${closeAt.toLocaleTimeString()}</p><p>Usuario que abrió: ${closing.usuario_apertura || '-'}</p><p>Usuario que cerró: ${closing.usuario_cierre || '-'}</p><p>Tiempo total de caja abierta: ${formatDurationMs(closeAt - openAt)}</p></div><div class="card"><h4>Detalle para enviar</h4><p>Cambio inicial: ${money(openingCash)}</p><p>Valor efectivo de ventas: ${money(totalCash)}</p><p>Valor QR de ventas: ${money(totalQr)}</p><p>Salida efectivo: ${money(outCash)}</p><p>Entrada efectivo: ${money(inCash)}</p><p>Salida QR: ${money(outQr)}</p><p>Entrada QR: ${money(inQr)}</p><p>Valor final en caja: ${money(totalInBox)}</p><p>Valor final descontando cambio inicial: ${money(realDelivered)}</p></div><div class="card"><h4>SECCIÓN 2 – RESUMEN FINANCIERO</h4><p>Inicio de caja: ${money(openingCash)}</p><p>Total ventas brutas: ${money(grossSales)}</p><p>Pagos de deuda cobrados: ${money(debtCollected)}</p><p>Total descuentos: ${money(totalDiscounts)}</p><p>Total ingresos netos: ${money((grossSales - totalDiscounts) + debtCollected)}</p><p>Total en efectivo: ${money(totalCash)}</p><p>Total QR: ${money(totalQr)}</p><p>Total salidas externas efectivo: ${money(outCash)}</p><p>Total salidas externas QR: ${money(outQr)}</p><p>Total entradas externas efectivo: ${money(inCash)}</p><p>Total entradas externas QR: ${money(inQr)}</p><p>Total efectivo final: ${money(totalCashFinal)}</p><p>Total QR final: ${money(totalQrFinal)}</p><p>Valor total en caja (incluye valor de caja): ${money(totalInBox)}</p><p>Valor efectivo real de venta entregado: ${money(realDelivered)}</p></div><div class="card"><h4>Productos vendidos</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Total</th></tr></thead><tbody>${agg.products.length ? agg.products.map((row) => `<tr><td>${row.name}</td><td>${row.qty}</td><td>${money(row.total)}</td></tr>`).join('') : '<tr><td colspan="3">Sin productos vendidos.</td></tr>'}</tbody></table></div><div class="card"><h4>HISTORIAL DE VENTAS DE CIERRE</h4><table><thead><tr><th>Fecha</th><th>Nro pedido</th><th>Método</th><th>Total</th><th>Usuario</th><th>Estado</th></tr></thead><tbody>${closingHistoryRows}</tbody></table></div><div class="card"><h4>SECCIÓN 3 – MÉTRICAS OPERATIVAS</h4><p>Cantidad total de ventas: ${closing.salesCount || sales.length}</p><p>Total productos vendidos: ${agg.qtyTotal}</p><p>Ticket promedio: ${money(agg.avgTicket)}</p><p>Venta más alta: ${money(agg.saleMax)}</p><p>Venta más baja: ${money(agg.saleMin)}</p><p>Ventas eliminadas: ${deletedCount} · Mov. caja: ${outflowCount} · Pagos deuda: ${debtPaymentsCount}</p></div><div class="card"><h4>Pagos de deuda</h4><table><thead><tr><th>Fecha pago</th><th>Persona</th><th>Detalle compra</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${debtPayments.map((p) => { const sale = saleRecordForPayment(p); const person = state.people.find((x) => x.id === p.debtorId); return `<tr><td>${new Date(p.paidAt).toLocaleString()}</td><td>${personFullName(person) || '-'}</td><td>${sale?.items?.map((i) => `${i.name} x${i.qty}`).join(', ') || '-'}</td><td>${p.method || '-'}</td><td>${money(p.amount || 0)}</td><td>${p.paidBy || '-'}</td></tr>`; }).join('') || '<tr><td colspan="6">Sin pagos de deuda.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de entradas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${entries.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin entradas.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de salidas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${exits.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin salidas.</td></tr>'}</tbody></table></div>`;
   if (closingSalesTable) closingSalesTable.innerHTML = sales.length ? sales.map((sale) => `<tr><td>${new Date(sale.createdAt).toLocaleString()}</td><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${sale.payment}</td><td>${money(sale.total)}</td><td>${sale.user}</td></tr>`).join('') : '<tr><td colspan="5">Sin ventas.</td></tr>';
   if (closingProductsTable) {
     const aggProducts = agg.products;
@@ -2678,6 +3077,48 @@ function renderDebtors() {
   let debtPersonTotal = $('debtPersonTotal');
   const debtPersonDetailsTable = $('debtPersonDetailsTable');
   if (!debtPeopleTable || !debtPersonDetailsTable || !debtPersonTitle) return;
+  if (payTotalDebtBtn && !document.getElementById('debtSaveChangesBtn')) {
+    const saveBtn = document.createElement('button');
+    saveBtn.id = 'debtSaveChangesBtn';
+    saveBtn.className = 'secondary';
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Guardar cambios';
+    saveBtn.style.marginLeft = '0.5rem';
+    payTotalDebtBtn.insertAdjacentElement('afterend', saveBtn);
+    saveBtn.addEventListener('click', async () => {
+      if (!pendingDebtSyncChanges) return;
+      saveBtn.disabled = true;
+      try {
+        await syncToCloud({ modules: ['operations'], reason: 'debt-payment-manual-save' });
+        await pullFromCloud({ force: true, modules: ['operations'], reason: 'debt-payment-manual-verify' });
+        const salesOk = [...pendingDebtSaleIds].every((saleId) => {
+          const sale = (state.sales || []).find((s) => s.id === saleId);
+          return sale && Number(sale.debtAmount || 0) <= 0 && sale.paymentStatus === 'realizado';
+        });
+        const paymentsOk = [...pendingDebtPaymentIds].every((paymentId) => (state.debtPayments || []).some((p) => p.id === paymentId));
+        if (!salesOk || !paymentsOk) throw new Error('Verificación post-guardado de deudas no consistente.');
+        pendingDebtSyncChanges = false;
+        pendingDebtSaleIds.clear();
+        pendingDebtPaymentIds.clear();
+      } catch (err) {
+        console.error('[debt][manual-save] error', err);
+        pendingDebtSyncChanges = true;
+      } finally {
+        refreshPendingSyncButtons();
+      }
+    });
+  }
+  const renderDebtorDetails = (personId = '') => {
+    const sales = state.sales.filter((s) => s.debtorId === personId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
+    const person = state.people.find((p) => p.id === personId);
+    const total = sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
+    state.activeDebtorId = personId;
+    debtPersonTitle.textContent = `${personFullName(person)} · ${person?.description || '-'} · Tel: ${person?.phone || '-'}`;
+    debtPersonTotal.textContent = `Deuda total: ${money(total)}`;
+    debtPersonDetailsTable.innerHTML = sales.length
+      ? sales.map((s) => `<tr><td>${new Date(s.createdAt).toLocaleString()}</td><td>${s.items.map((i) => `${i.name} x${i.qty}`).join(', ')}</td><td>${money(s.debtAmount)}</td><td>${s.user}</td><td><button class="secondary" data-pay-sale="${s.id}" type="button">Pagar deuda</button></td></tr>`).join('')
+      : '<tr><td colspan="5">Sin deudas pendientes para mostrar.</td></tr>';
+  };
   if (!debtPersonTotal) {
     debtPersonTotal = document.createElement('p');
     debtPersonTotal.id = 'debtPersonTotal';
@@ -2687,7 +3128,8 @@ function renderDebtors() {
     debtPersonTitle.insertAdjacentElement('afterend', debtPersonTotal);
   }
   const grouped = new Map();
-  state.sales.filter((s) => Number(s.debtAmount || 0) > 0 && s.debtorId).forEach((s) => {
+  console.info('[debt][render]', { salesCount: state.sales?.length || 0, debtPaymentsCount: state.debtPayments?.length || 0 });
+  state.sales.filter((s) => Number(s.debtAmount || 0) > 0 && s.debtorId && s.paymentStatus !== 'realizado').forEach((s) => {
     if (!grouped.has(s.debtorId)) grouped.set(s.debtorId, []);
     grouped.get(s.debtorId).push(s);
   });
@@ -2697,18 +3139,19 @@ function renderDebtors() {
     return `<tr><td>${personFullName(person) || 'Persona eliminada'}</td><td>${money(total)}</td><td>${sales.length}</td><td><button class="secondary" data-debtor-id="${personId}" type="button">Ver detalles</button></td></tr>`;
   });
   debtPeopleTable.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4">Sin deudas pendientes.</td></tr>';
+  if (state.activeDebtorId && !grouped.has(state.activeDebtorId)) {
+    state.activeDebtorId = '';
+    debtPersonTitle.textContent = 'Selecciona una persona para ver sus deudas pendientes';
+    debtPersonDetailsTable.innerHTML = '<tr><td colspan="5">Sin deudas pendientes para mostrar.</td></tr>';
+  }
+  if (state.activeDebtorId && grouped.has(state.activeDebtorId)) renderDebtorDetails(state.activeDebtorId);
   if (debtPersonTotal && !state.activeDebtorId) debtPersonTotal.textContent = 'Deuda total: Bs 0.00';
   debtPeopleTable.onclick = (e) => {
     const btn = e.target.closest('button[data-debtor-id]');
     if (!btn) return;
-    const person = state.people.find((p) => p.id === btn.dataset.debtorId);
-    const sales = state.sales.filter((s) => s.debtorId === btn.dataset.debtorId && Number(s.debtAmount || 0) > 0);
-    const total = sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
-    state.activeDebtorId = btn.dataset.debtorId;
-    debtPersonTitle.textContent = `${personFullName(person)} · ${person?.description || '-'} · Tel: ${person?.phone || '-'}`;
-    debtPersonTotal.textContent = `Deuda total: ${money(total)}`;
-    debtPersonDetailsTable.innerHTML = sales.map((s) => `<tr><td>${new Date(s.createdAt).toLocaleString()}</td><td>${s.items.map((i) => `${i.name} x${i.qty}`).join(', ')}</td><td>${money(s.debtAmount)}</td><td>${s.user}</td><td><button class=\"secondary\" data-pay-sale=\"${s.id}\" type=\"button\">Pagar deuda</button></td></tr>`).join('');
+    renderDebtorDetails(btn.dataset.debtorId);
   };
+  refreshPendingSyncButtons();
 }
 
 function renderUsers() {
@@ -2753,9 +3196,17 @@ function renderUsers() {
     userManagerCard.appendChild(wrap);
   }
   const saveUsersBtn = document.getElementById('saveUsersChangesBtn');
-  if (saveUsersBtn) saveUsersBtn.onclick = () => {
-    persist();
-    setMsg(homeMessage, 'Usuarios y permisos guardados correctamente.');
+  if (saveUsersBtn) saveUsersBtn.onclick = async () => {
+    console.info('[users][save] Guardando usuarios manualmente', { usersCount: state.users?.length || 0 });
+    persist({ module: 'users' });
+    try {
+      await syncToCloud();
+      await pullFromCloud({ force: true });
+      setMsg(homeMessage, 'Usuarios y permisos guardados correctamente.');
+    } catch (err) {
+      console.error('[users][sync] Error guardando usuarios en cloud', { message: err?.message, code: err?.code, status: err?.status });
+      setMsg(homeMessage, 'No se pudo guardar usuarios en cloud.', false);
+    }
   };
   const exportUsersBtn = document.getElementById('exportUsersBtn');
   if (exportUsersBtn) exportUsersBtn.onclick = exportUsersToExcel;
@@ -2838,12 +3289,23 @@ function importUsersFromExcelFile(file) {
         usersMap.set(key, base);
       });
       state.users = [...usersMap.values()];
+      console.info('[users][import] usuarios cargados desde XLSX', { importedRows: rows.length, usersCount: state.users.length });
       ensureUsers();
-      persist();
+      persist({ module: 'users' });
       renderUsers();
-      alert('Usuarios importados correctamente.');
+      Promise.resolve().then(async () => {
+        try {
+          await syncToCloud();
+          await pullFromCloud({ force: true });
+          console.info('[users][sync] usuarios importados sincronizados', { usersCount: state.users.length });
+          alert('Usuarios importados correctamente.');
+        } catch (err) {
+          console.error('[users][sync] fallo sincronizando usuarios importados', { message: err?.message, code: err?.code, status: err?.status });
+          alert('Usuarios importados localmente, pero falló sincronización cloud.');
+        }
+      });
     } catch (error) {
-      console.error('[users] import error', error);
+      console.error('[users][import] import error', error);
       alert('No se pudo importar el archivo de usuarios.');
     }
   };
@@ -2852,38 +3314,6 @@ function importUsersFromExcelFile(file) {
 
 function normalizeProductName(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-function productCategoryExportLabel(product) {
-  const category = String(product?.category || 'Todos').trim() || 'Todos';
-  const sub = findSubCategory(category, product?.subcategoryId);
-  return sub ? `${category}/${String(sub.name || 'Sin nombre').trim()}` : category;
-}
-
-function parseProductCategoryImportLabel(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return { category: 'Todos', subcategoryName: '' };
-  const parts = raw.split('/').map((part) => String(part || '').trim()).filter(Boolean);
-  return {
-    category: parts[0] || 'Todos',
-    subcategoryName: parts.slice(1).join('/') || ''
-  };
-}
-
-function ensureImportedSubcategory(category, subcategoryName) {
-  const cleanCategory = String(category || 'Todos').trim() || 'Todos';
-  const cleanSubcategory = String(subcategoryName || '').trim();
-  if (!cleanSubcategory) return null;
-  state.subcategories = state.subcategories || {};
-  const list = Array.isArray(state.subcategories[cleanCategory]) ? state.subcategories[cleanCategory] : [];
-  const existing = list.find((item) => String(item?.name || '').trim().toLowerCase() === cleanSubcategory.toLowerCase());
-  if (existing) {
-    state.subcategories[cleanCategory] = list;
-    return existing.id;
-  }
-  const created = { id: uid(), name: cleanSubcategory, image: '' };
-  state.subcategories[cleanCategory] = [...list, created];
-  return created.id;
 }
 
 function isStockEnabled() {
@@ -3041,7 +3471,7 @@ function openWarehouseResetModal() {
   const overlay = document.createElement('div');
   overlay.id = overlayId;
   overlay.className = 'modal';
-  overlay.innerHTML = `<div class="modal-card"><h3>Restablecer componentes</h3><p>Esta acción eliminará completamente toda la información de componentes. Esta acción NO se puede deshacer.</p><label>Para confirmar, ingrese su contraseña.<input id="warehouseResetPassInput" type="password" placeholder="Contraseña actual" /></label><div class="grid2"><button id="warehouseResetConfirmBtn" class="danger" type="button">Confirmar</button><button id="warehouseResetCancelBtn" class="secondary" type="button">Cancelar</button></div><p id="warehouseResetMsg"></p></div>`;
+  overlay.innerHTML = `<div class="modal-card"><h3>Restablecer Almacén</h3><p>Esta acción eliminará completamente toda la información del almacén. Esta acción NO se puede deshacer.</p><label>Para confirmar, ingrese su contraseña.<input id="warehouseResetPassInput" type="password" placeholder="Contraseña actual" /></label><div class="grid2"><button id="warehouseResetConfirmBtn" class="danger" type="button">Confirmar</button><button id="warehouseResetCancelBtn" class="secondary" type="button">Cancelar</button></div><p id="warehouseResetMsg"></p></div>`;
   document.body.appendChild(overlay);
   document.getElementById('warehouseResetCancelBtn')?.addEventListener('click', () => overlay.remove());
   document.getElementById('warehouseResetConfirmBtn')?.addEventListener('click', () => {
@@ -3058,7 +3488,7 @@ function openWarehouseResetModal() {
     persist();
     renderWarehouse();
     overlay.remove();
-    if (warehouseStatus) warehouseStatus.textContent = 'Componentes restablecidos correctamente.';
+    if (warehouseStatus) warehouseStatus.textContent = 'Almacén restablecido correctamente.';
   });
 }
 
@@ -3067,9 +3497,10 @@ function renderWarehouse() {
   normalizeWarehouseData();
   const canView = hasPermission('viewWarehouseButton');
   if (!canView) {
-    warehouseStatus && (warehouseStatus.textContent = 'No tienes permiso para ver componentes.');
+    warehouseStatus && (warehouseStatus.textContent = 'No tienes permiso para ver Almacén.');
     homeScreen?.classList.remove('hidden');
-      return;
+    warehouseScreen?.classList.add('hidden');
+    return;
   }
 
   const currentRoute = normalizeRoute(window.location.hash || '#warehouse');
@@ -3079,7 +3510,7 @@ function renderWarehouse() {
     const wrap = document.createElement('div');
     wrap.id = 'warehouseTopActions';
     wrap.className = 'grid3';
-    wrap.innerHTML = '<button id="openWarehouseManagementTabBtn" class="secondary" type="button">Gestión de Componentes y Recetas</button><button id="openWarehouseMovesTabBtn" class="secondary" type="button">Movimientos</button><button id="warehouseResetBtn" class="danger" type="button">Restablecer componentes</button>';
+    wrap.innerHTML = '<button id="openWarehouseManagementTabBtn" class="secondary" type="button">Gestión de Componentes y Recetas</button><button id="openWarehouseMovesTabBtn" class="secondary" type="button">Movimientos</button><button id="warehouseResetBtn" class="danger" type="button">Restablecer Almacén</button>';
     warehouseStatus?.insertAdjacentElement('afterend', wrap);
     document.getElementById('openWarehouseManagementTabBtn')?.addEventListener('click', () => openWarehouseNewTab('warehouse/gestion'));
     document.getElementById('openWarehouseMovesTabBtn')?.addEventListener('click', () => openWarehouseNewTab('warehouse/movimientos'));
@@ -3110,7 +3541,7 @@ function renderWarehouse() {
     const bottom = document.createElement('div');
     bottom.id = 'warehouseBottomActions';
     bottom.className = 'grid2';
-    bottom.innerHTML = '<button id="warehouseBottomMovesBtn" class="secondary" type="button">Movimientos</button><button id="warehouseBottomResetBtn" class="danger" type="button">Restablecer componentes</button>';
+    bottom.innerHTML = '<button id="warehouseBottomMovesBtn" class="secondary" type="button">Movimientos</button><button id="warehouseBottomResetBtn" class="danger" type="button">Restablecer Almacén</button>';
     warehouseTable.closest('table')?.insertAdjacentElement('afterend', bottom);
     document.getElementById('warehouseBottomMovesBtn')?.addEventListener('click', () => navigateTo('warehouse/movimientos'));
     document.getElementById('warehouseBottomResetBtn')?.addEventListener('click', openWarehouseResetModal);
@@ -3122,8 +3553,8 @@ function renderWarehouse() {
 
 function exportProductsToExcel() {
   if (!window.XLSX) return alert('No se pudo cargar la librería XLSX.');
-  const rows = (state.products || []).map((p) => ({ CATEGORIA: productCategoryExportLabel(p), PRODUCTO: String(p.name || '').trim(), PRECIO: Number(p.price || 0) }));
-  const ws = XLSX.utils.json_to_sheet(rows, { header: ['CATEGORIA', 'PRODUCTO', 'PRECIO'] });
+  const rows = (state.products || []).map((p) => ({ PRODUCTO: String(p.name || '').trim(), CATEGORIA: String(p.category || 'Todos').trim(), PRECIO: Number(p.price || 0) }));
+  const ws = XLSX.utils.json_to_sheet(rows, { header: ['PRODUCTO', 'CATEGORIA', 'PRECIO'] });
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'PRODUCTOS');
   XLSX.writeFile(wb, 'productos_pos.xlsx');
@@ -3140,10 +3571,10 @@ function importProductsFromExcelFile(file) {
       const ws = wb.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
       const headers = Object.keys(rows[0] || {});
-      const expected = ['CATEGORIA', 'PRODUCTO', 'PRECIO'];
-      const validHeaders = headers.length === expected.length && expected.every((h) => headers.includes(h)) && expected.every((h, index) => headers[index] === h);
+      const expected = ['PRODUCTO', 'CATEGORIA', 'PRECIO'];
+      const validHeaders = headers.length === expected.length && expected.every((h) => headers.includes(h));
       if (!rows.length || !validHeaders) {
-        alert('Formato inválido. Debe contener exactamente: CATEGORIA | PRODUCTO | PRECIO');
+        alert('Formato inválido. Debe contener exactamente: PRODUCTO | CATEGORIA | PRECIO');
         return;
       }
       let created = 0;
@@ -3152,21 +3583,19 @@ function importProductsFromExcelFile(file) {
       const existingMap = new Map((state.products || []).map((p) => [normalizeProductName(p.name), p]));
       rows.forEach((row, idx) => {
         const productName = String(row.PRODUCTO || '').trim();
-        const { category, subcategoryName } = parseProductCategoryImportLabel(row.CATEGORIA);
-        const subcategoryId = ensureImportedSubcategory(category, subcategoryName);
+        const category = String(row.CATEGORIA || 'Todos').trim() || 'Todos';
         const price = Number(row.PRECIO);
         if (!productName) { errors.push(`Fila ${idx + 2}: PRODUCTO vacío`); return; }
         if (Number.isNaN(price)) { errors.push(`Fila ${idx + 2}: PRECIO inválido`); return; }
         const key = normalizeProductName(productName);
         const found = existingMap.get(key);
         if (!found) {
-          state.products.push({ id: uid(), name: productName, category, subcategoryId, price, hidden: false });
+          state.products.push({ id: uid(), name: productName, category, price, hidden: false });
           existingMap.set(key, state.products[state.products.length - 1]);
           created += 1;
         } else {
           found.name = productName;
           found.category = category;
-          found.subcategoryId = subcategoryId;
           found.price = price;
           updated += 1;
         }
@@ -3174,8 +3603,6 @@ function importProductsFromExcelFile(file) {
       });
       persist();
       renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
       renderSaleSelectors();
       alert(`Importación finalizada.\nCreados: ${created}\nActualizados: ${updated}\nErrores: ${errors.length}${errors.length ? `\n\n${errors.join('\n')}` : ''}`);
     } catch (error) {
@@ -3206,8 +3633,6 @@ function addStockManually() {
   product.stockCurrent = Number(product.stockCurrent || 0) + qty;
   persist();
   renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
   renderSaleSelectors();
   renderStockView();
 }
@@ -3248,8 +3673,6 @@ function importStockFromExcelFile(file) {
       });
       persist();
       renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
       renderSaleSelectors();
       renderStockView();
       alert(`Importación de stock finalizada.\nProductos actualizados: ${updated}\nErrores: ${errors.length}${errors.length ? `\n\n${errors.join('\n')}` : ''}`);
@@ -3273,8 +3696,6 @@ function openProductListView() {
   hideProductSubviews();
   productListCard?.classList.remove('hidden');
   renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
 }
 
 function renderImageRetryHint(kind, key, value) {
@@ -3285,32 +3706,93 @@ function renderImageRetryHint(kind, key, value) {
   return `<div class="upload-error">Imagen no disponible en este navegador.</div><button class="secondary" data-img-retry-kind="${kind}" data-img-retry-key="${escapeHtml(String(key || ''))}" type="button">Reintentar</button>`;
 }
 
+function getOrderedCategories(options = {}) {
+  const includeHidden = options.includeHidden !== false;
+  const ordered = [];
+  (state.categories || []).forEach((category) => {
+    const name = String(category || '').trim();
+    if (name && !ordered.includes(name)) ordered.push(name);
+  });
+  (state.products || []).forEach((product) => {
+    if (!includeHidden && product?.hidden) return;
+    const category = String(product?.category || '').trim();
+    if (category && !ordered.includes(category)) ordered.push(category);
+  });
+  return ordered;
+}
+
+function moveCategory(categoryName = '', direction = 0) {
+  const list = Array.isArray(state.categories) ? state.categories.slice() : [];
+  const from = list.findIndex((x) => String(x || '').trim() === String(categoryName || '').trim());
+  const step = Number(direction || 0);
+  const to = from + step;
+  if (from < 0 || step === 0 || to < 0 || to >= list.length) return false;
+  const temp = list[from];
+  list[from] = list[to];
+  list[to] = temp;
+  state.categories = list;
+  return true;
+}
+
+function reorderProductsWithinCategory(products = [], productId = '', direction = 0) {
+  const list = Array.isArray(products) ? products.slice() : [];
+  const index = list.findIndex((product) => product?.id === productId);
+  if (index < 0) return list;
+  const category = list[index]?.category || '';
+  const siblings = list
+    .map((product, idx) => ({ product, idx }))
+    .filter(({ product }) => (product?.category || '') === category);
+  const siblingIndex = siblings.findIndex(({ product }) => product?.id === productId);
+  const targetSiblingIndex = siblingIndex + Number(direction || 0);
+  if (siblingIndex < 0 || targetSiblingIndex < 0 || targetSiblingIndex >= siblings.length) return list;
+  const sourceIndex = siblings[siblingIndex].idx;
+  const targetIndex = siblings[targetSiblingIndex].idx;
+  const temp = list[sourceIndex];
+  list[sourceIndex] = list[targetIndex];
+  list[targetIndex] = temp;
+  return list;
+}
+
+function moveProductWithinCategory(productId = '', direction = 0) {
+  const nextProducts = reorderProductsWithinCategory(state.products || [], productId, direction);
+  const changed = nextProducts.some((product, index) => product?.id !== state.products?.[index]?.id);
+  if (changed) state.products = nextProducts;
+  return changed;
+}
+
 function renderProducts() {
   const selectedCategory = productCategory?.value || '';
-  const selectedSubCategory = productSubCategory?.value || '';
-  const sorted = state.products.slice().sort((a, b) => {
-    if (productSortMode === 'name') return String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' });
-    if (productSortMode === 'price') return Number(a.price || 0) - Number(b.price || 0);
-    if (productSortMode === 'category') {
-      const catA = productCategoryExportLabel(a);
-      const catB = productCategoryExportLabel(b);
-      const byCat = String(catA).localeCompare(String(catB), 'es', { sensitivity: 'base' });
-      if (byCat !== 0) return byCat;
-      return String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' });
-    }
-    return 0;
-  }).sort((a, b) => Number(Boolean(a.hidden)) - Number(Boolean(b.hidden)));
+  const orderedCategories = getOrderedCategories({ includeHidden: true });
   const productsHead = productsTable?.closest('table')?.querySelector('thead tr');
   if (productsHead) productsHead.innerHTML = '<th>Categoría</th><th>Producto</th><th>Precio</th><th>Acciones</th><th>Imagen</th>';
   const categoriesHead = categoriesTable?.closest('table')?.querySelector('thead tr');
   if (categoriesHead) categoriesHead.innerHTML = '<th>Categoría</th><th>Acciones</th><th>Imagen</th>';
-  if (productsTable) productsTable.innerHTML = sorted.map((p) => { const st = getImageUploadStatus('product', p.id); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const prodSrc = resolveImageSource(p.imageUrl || p.imageDataUrl); const imageBlock = prodSrc ? `<div class=\"image-cell\"><img class=\"image-thumb\" src=\"${prodSrc}\" alt=\"${p.name}\" loading=\"lazy\" /><button class=\"danger\" data-prod-img-del=\"${p.id}\" type=\"button\">X</button></div>` : '<span class=\"muted\">Sin imagen</span>'; const err = st?.error ? `<div class=\"upload-error\">${st.error}</div>` : ''; const retry = renderImageRetryHint('product', p.id, p.imageUrl || p.imageDataUrl); const sub = findSubCategory(p.category, p.subcategoryId); const categoryLabel = sub ? `${p.category || '-'} / ${sub.name || 'Sin nombre'}` : (p.category || '-'); return `<tr><td>${categoryLabel}</td><td>${p.name}</td><td>${money(p.price)}</td><td><button class=\"secondary\" data-prod-edit=\"${p.id}\" type=\"button\">Editar</button> <button class=\"secondary\" data-prod-img=\"${p.id}\" type=\"button\" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> <button class=\"secondary\" data-prod-hide=\"${p.id}\" type=\"button\">${p.hidden ? 'Mostrar' : 'Ocultar'}</button> <button class=\"secondary\" data-prod-del=\"${p.id}\" type=\"button\">Eliminar</button></td><td>${imageBlock}${renderImageUploadProgress('product', p.id)}${err}${retry}</td></tr>`; }).join('');
-  if (categoriesTable) categoriesTable.innerHTML = (state.categories || []).map((c) => { const st = getImageUploadStatus('category', c); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const catSrc = resolveImageSource(state.categoryImages?.[c]); const imageBlock = catSrc ? `<div class=\"image-cell\"><img class=\"image-thumb\" src=\"${catSrc}\" alt=\"${c}\" loading=\"lazy\" /><button class=\"danger\" data-cat-img-del=\"${c}\" type=\"button\">X</button></div>` : '<span class=\"muted\">Sin imagen</span>'; const err = st?.error ? `<div class=\"upload-error\">${st.error}</div>` : ''; const retry = renderImageRetryHint('category', c, state.categoryImages?.[c]); return `<tr><td>${c}</td><td><button class=\"secondary\" data-cat-img=\"${c}\" type=\"button\" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> ${c === 'Todos' ? '' : `<button class=\"secondary\" data-cat-del=\"${c}\" type=\"button\">Eliminar</button>`}</td><td>${imageBlock}${renderImageUploadProgress('category', c)}${err}${retry}</td></tr>`; }).join('');
-  if (productCategory) {
-    productCategory.innerHTML = (state.categories || []).map((c) => `<option value="${c}">${c}</option>`).join('');
-    if (selectedCategory && state.categories.includes(selectedCategory)) productCategory.value = selectedCategory;
+  if (productsTable) {
+    const rows = [];
+    orderedCategories.forEach((category) => {
+      const productsInCategory = (state.products || []).filter((product) => (product.category || '') === category);
+      if (!productsInCategory.length) return;
+      rows.push(`<tr class="products-category-divider"><td colspan="5"><strong>${escapeHtml(category)}</strong></td></tr>`);
+      productsInCategory.forEach((p, index) => {
+        const currentCategory = p.category || 'Sin categoría';
+        const st = getImageUploadStatus('product', p.id);
+        const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen';
+        const prodSrc = resolveImageSource(p.imageUrl || p.imageDataUrl);
+        const imageBlock = prodSrc ? `<div class="image-cell"><img class="image-thumb" src="${prodSrc}" alt="${p.name}" loading="lazy" /><button class="danger" data-prod-img-del="${p.id}" type="button">X</button></div>` : '<span class="muted">Sin imagen</span>';
+        const err = st?.error ? `<div class="upload-error">${st.error}</div>` : '';
+        const retry = renderImageRetryHint('product', p.id, p.imageUrl || p.imageDataUrl);
+        const upDisabled = index === 0 ? 'disabled' : '';
+        const downDisabled = index === productsInCategory.length - 1 ? 'disabled' : '';
+        rows.push(`<tr><td>${escapeHtml(currentCategory)}</td><td>${escapeHtml(p.name || '')}${p.hidden ? ' <span class="muted">(Oculto)</span>' : ''}</td><td>${money(p.price)}</td><td><button class="secondary" data-prod-up="${p.id}" type="button" ${upDisabled}>↑</button> <button class="secondary" data-prod-down="${p.id}" type="button" ${downDisabled}>↓</button> <button class="secondary" data-prod-edit="${p.id}" type="button">Editar</button> <button class="secondary" data-prod-img="${p.id}" type="button" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> <button class="secondary" data-prod-hide="${p.id}" type="button">${p.hidden ? 'Mostrar' : 'Ocultar'}</button> <button class="secondary" data-prod-del="${p.id}" type="button">Eliminar</button></td><td>${imageBlock}${renderImageUploadProgress('product', p.id)}${err}${retry}</td></tr>`);
+      });
+    });
+    productsTable.innerHTML = rows.join('');
   }
-  renderProductSubCategoryOptions(productCategory?.value || state.categories?.[0] || '', selectedSubCategory);
+  if (categoriesTable) categoriesTable.innerHTML = (state.categories || []).map((c, index, arr) => { const st = getImageUploadStatus('category', c); const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen'; const catSrc = resolveImageSource(state.categoryImages?.[c]); const imageBlock = catSrc ? `<div class="image-cell"><img class="image-thumb" src="${catSrc}" alt="${c}" loading="lazy" /><button class="danger" data-cat-img-del="${c}" type="button">X</button></div>` : '<span class="muted">Sin imagen</span>'; const err = st?.error ? `<div class="upload-error">${st.error}</div>` : ''; const retry = renderImageRetryHint('category', c, state.categoryImages?.[c]); const upDisabled = index === 0 ? 'disabled' : ''; const downDisabled = index === arr.length - 1 ? 'disabled' : ''; return `<tr><td>${c}</td><td><button class="secondary" data-cat-up="${c}" type="button" ${upDisabled}>↑</button> <button class="secondary" data-cat-down="${c}" type="button" ${downDisabled}>↓</button> <button class="secondary" data-cat-img="${c}" type="button" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> ${c === 'Todos' ? '' : `<button class="secondary" data-cat-del="${c}" type="button">Eliminar</button>`}</td><td>${imageBlock}${renderImageUploadProgress('category', c)}${err}${retry}</td></tr>`; }).join('');
+  if (productCategory) {
+    productCategory.innerHTML = orderedCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
+    if (selectedCategory && orderedCategories.includes(selectedCategory)) productCategory.value = selectedCategory;
+  }
   if (comboProductsSelect) comboProductsSelect.innerHTML = state.products.filter((p) => !p.hidden).map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
   if (openStockBtn) openStockBtn.classList.toggle('hidden', !appConfig.stockActivo);
   renderComboBuilder();
@@ -3321,7 +3803,7 @@ function renderProducts() {
 function renderComboBuilder() {
   const host = document.getElementById('comboItemsTable');
   if (!host) return;
-  const cats = [...new Set(state.products.filter((p) => !p.hidden).map((p) => p.category))];
+  const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   const toolbarId = 'comboBuilderToolbar';
   let toolbar = document.getElementById(toolbarId);
   if (!toolbar) {
@@ -3380,27 +3862,11 @@ function renderComboBuilder() {
 
 function renderOutflows() {
   if (!outflowsTable) return;
-  const list = (state.outflows || []).slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-  outflowsTable.innerHTML = list.length
-    ? list.map((o) => {
-      const action = String(o.tipo || o.direction || '-');
-      const caja = String(o.caja || 'caja_dia').replace('caja_', 'Caja ');
-      const impact = o.direction === 'entrada' ? '+' : (o.direction === 'salida' ? '-' : '↔');
-      const canDelete = String(o.tipo || '') !== 'transferencia';
-      return `<tr><td>${new Date(o.createdAt).toLocaleString()}</td><td>${action}</td><td>${caja}</td><td>${o.method || '-'}</td><td>${o.description || '-'}</td><td>${money(o.amount)}</td><td>${impact}</td><td>${canDelete ? `<button class="secondary" data-out-del="${o.id}" type="button">Eliminar</button>` : '-'}</td></tr>`;
-    }).join('')
-    : '<tr><td colspan="8">Sin movimientos registrados.</td></tr>';
+  const list = state.activeCashBoxId ? (state.outflows || []).filter((o) => o.cashBoxId === state.activeCashBoxId) : [];
+  outflowsTable.innerHTML = list.map((o) => `<tr><td>${new Date(o.createdAt).toLocaleString()}</td><td>${o.direction}</td><td>${o.method}</td><td>${o.description}</td><td>${money(o.amount)}</td><td>${o.direction === 'entrada' ? '+' : '-'}</td><td><button class="secondary" data-out-del="${o.id}" type="button">Eliminar</button></td></tr>`).join('');
 }
 
 function renderSummary() {
-  const totalsGeneral = globalCashTotals();
-  const generalCashSummaryEfectivo = document.getElementById('generalCashSummaryEfectivo');
-  const generalCashSummaryQr = document.getElementById('generalCashSummaryQr');
-  const generalCashSummaryTotal = document.getElementById('generalCashSummaryTotal');
-  if (generalCashSummaryEfectivo) generalCashSummaryEfectivo.textContent = money(totalsGeneral.efectivo);
-  if (generalCashSummaryQr) generalCashSummaryQr.textContent = money(totalsGeneral.qr);
-  if (generalCashSummaryTotal) generalCashSummaryTotal.textContent = money(totalsGeneral.total);
-
   const activeCash = getActiveCashBox();
   if (!activeCash) {
     if (summarySalesCount) summarySalesCount.textContent = '0';
@@ -3424,17 +3890,24 @@ function renderSummary() {
     return;
   }
 
-  const sales = salesForActiveCashBox().filter((s) => !s.carryOverDebt);
-  const metrics = activeDailyCashMetrics();
-  const cashInTotal = metrics.cashIn;
-  const qrInTotal = metrics.qrIn;
+  const sales = salesForActiveCashBox().filter((s) => isCountableActiveSale(s));
+  console.info('[sale][summary] calculando resumen', { activeCashBoxId: state.activeCashBoxId || '', salesCount: sales.length });
+  const debtPayments = activeDebtPayments().filter((p) => p.cashBoxId === state.activeCashBoxId);
+  const cashSales = sales.reduce((a, s) => a + Number(s.breakdown?.cash || 0), 0);
+  const qrSales = sales.reduce((a, s) => a + Number(s.breakdown?.qr || 0), 0);
+  const debtCash = debtPayments.reduce((a, p) => a + Number(p.cashAmount || (p.method === 'efectivo' ? p.amount : 0) || 0), 0);
+  const debtQr = debtPayments.reduce((a, p) => a + Number(p.qrAmount || (p.method === 'qr' ? p.amount : 0) || 0), 0);
+  const cashInTotal = cashSales + debtCash;
+  const qrInTotal = qrSales + debtQr;
   const debtPending = state.sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
-  const outCash = metrics.outCash;
-  const inCash = metrics.inCash;
-  const outQr = metrics.outQr;
-  const inQr = metrics.inQr;
-  const opening = Number(metrics.openingCash || 0);
+  const outflows = (state.outflows || []).filter((o) => o.cashBoxId === state.activeCashBoxId);
+  const outCash = outflows.filter((o) => o.direction === 'salida' && o.method === 'efectivo').reduce((a, o) => a + Number(o.amount || 0), 0);
+  const inCash = outflows.filter((o) => o.direction === 'entrada' && o.method === 'efectivo').reduce((a, o) => a + Number(o.amount || 0), 0);
+  const outQr = outflows.filter((o) => o.direction === 'salida' && o.method === 'qr').reduce((a, o) => a + Number(o.amount || 0), 0);
+  const inQr = outflows.filter((o) => o.direction === 'entrada' && o.method === 'qr').reduce((a, o) => a + Number(o.amount || 0), 0);
+  const opening = Number(activeCash.openingCash || 0);
   const total = cashInTotal + qrInTotal + opening;
+  console.info('[sale][cash]', { activeCashBoxId: state.activeCashBoxId || '', cashInTotal, qrInTotal, opening, total });
 
   if (summarySalesCount) summarySalesCount.textContent = String(sales.length);
   if (summaryTotal) summaryTotal.textContent = money(total);
@@ -3446,22 +3919,22 @@ function renderSummary() {
   if (summaryBoxInCash) summaryBoxInCash.textContent = money(opening);
   if (summaryOutCash) summaryOutCash.textContent = money(outCash);
   if (summaryInCash) summaryInCash.textContent = money(inCash);
-  const netCash = metrics.netCash;
+  const netCash = opening + cashInTotal + inCash - outCash;
   if (summaryNetCash) summaryNetCash.textContent = money(netCash);
   if (summaryFinalCash) summaryFinalCash.textContent = money(cashInTotal + inCash - outCash);
   if (cashTotalBox) cashTotalBox.textContent = money(netCash);
   if (summaryQr) summaryQr.textContent = money(qrInTotal);
   if (summaryOutQr) summaryOutQr.textContent = money(outQr);
   if (summaryInQr) summaryInQr.textContent = money(inQr);
-  if (summaryFinalQr) summaryFinalQr.textContent = money(metrics.netQr);
-  if (qrTotalBox) qrTotalBox.textContent = money(metrics.netQr);
+  if (summaryFinalQr) summaryFinalQr.textContent = money(qrInTotal + inQr - outQr);
+  if (qrTotalBox) qrTotalBox.textContent = money(qrInTotal + inQr - outQr);
 }
 
 
 
 function renderSoldProductsList() {
   if (!soldProductsTable) return;
-  const list = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt);
+  const list = salesForActiveCashBox().filter((sale) => isCountableActiveSale(sale));
   const map = new Map();
   list.forEach((sale) => (sale.items || []).forEach((it) => {
     const key = it.name;
@@ -3814,9 +4287,14 @@ function renderSalesHistory() {
     salesUserFilter.innerHTML = users.join('');
     salesUserFilter.value = prev;
   }
-  const validSales = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt).map((sale) => ({ ...sale, saleStatus: 'OK', saleStatusClass: '' }));
-  const deletedSales = (state.deletedSales || []).filter((sale) => !state.activeCashBoxId || sale.cashBoxId === state.activeCashBoxId).map((sale) => ({ ...sale, saleStatus: 'ANULADA', saleStatusClass: 'sale-annulled' }));
-  let list = [...validSales, ...deletedSales].slice();
+  const salesInBox = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt);
+  const mappedSales = salesInBox.map((sale) => ({ ...sale, saleStatus: isSaleAnnulled(sale) ? 'ANULADA' : 'OK', saleStatusClass: isSaleAnnulled(sale) ? 'sale-annulled' : '' }));
+  console.info('[sale][history] render historial', { activeCashBoxId: state.activeCashBoxId || '', validSalesCount: mappedSales.length, deletedSalesCount: (state.deletedSales || []).length });
+  const existingIds = new Set(mappedSales.map((sale) => String(sale.id || '')));
+  const deletedSales = (state.deletedSales || [])
+    .filter((sale) => (!state.activeCashBoxId || sale.cashBoxId === state.activeCashBoxId) && !existingIds.has(String(sale.id || '')))
+    .map((sale) => ({ ...sale, saleStatus: 'ANULADA', saleStatusClass: 'sale-annulled' }));
+  let list = [...mappedSales, ...deletedSales].slice();
   const searchOrder = (salesOrderSearchInput?.value || '').trim();
   if (userFilter) list = list.filter((s) => s.user === userFilter);
   if (searchOrder) list = list.filter((s) => String(s.orderNumber || '').includes(searchOrder));
@@ -3824,10 +4302,12 @@ function renderSalesHistory() {
   salesTable.innerHTML = list.length ? list.map((sale) => {
     const isAnnulled = sale.saleStatus === 'ANULADA';
     const actions = isAnnulled
-      ? `<span class="muted">Venta anulada${sale.deletedBy ? ` · eliminado por ${sale.deletedBy}` : ''}</span>`
-      : `<button type="button" class="secondary" data-sale-act="view" data-sale-id="${sale.id}">Ver Venta</button> <button type="button" class="secondary" data-sale-act="invoice" data-sale-id="${sale.id}">Ver factura</button>${hasPermission('deleteSales') ? ` <button type="button" class="secondary" data-sale-act="edit" data-sale-id="${sale.id}">Editar venta</button> <button type="button" class="secondary" data-sale-act="del" data-sale-id="${sale.id}">Eliminar venta</button>` : ''}`;
-    return `<tr style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}">${sale.saleStatus}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
+      ? `<span class="muted">Venta anulada${sale.deletedBy ? ` · anulada por ${escapeHtml(sale.deletedBy)}` : ''}</span>`
+      : `<button type="button" class="secondary" data-sale-act="view" data-sale-id="${sale.id}">Ver Venta</button> <button type="button" class="secondary" data-sale-act="invoice" data-sale-id="${sale.id}">Ver factura</button>${hasPermission('deleteSales') ? ` <button type="button" class="secondary" data-sale-act="edit" data-sale-id="${sale.id}">Editar venta</button> <button type="button" class="secondary" data-sale-act="del" data-sale-id="${sale.id}">Anular venta</button>` : ''}`;
+    const statusCell = isAnnulled ? `ANULADA${sale.deletedBy ? `<br><small>anulada por: ${escapeHtml(sale.deletedBy)}</small>` : ''}` : sale.saleStatus;
+    return `<tr style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}"><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>${money(sale.total)}</td><td>${sale.payment}</td><td style="${isAnnulled ? 'color:#c1121f;font-weight:700;' : ''}">${statusCell}</td><td>${actions}</td><td>${sale.user}</td></tr>`;
   }).join('') : '<tr><td colspan="7">Sin ventas.</td></tr>';
+  refreshPendingSyncButtons();
 }
 
 
@@ -3845,7 +4325,7 @@ function renderDeletedSales() {
 
 function renderProductSalesReport() {
   if (!productSalesReportTable) return;
-  const list = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt).slice();
+  const list = salesForActiveCashBox().filter((sale) => isCountableActiveSale(sale)).slice();
   const map = new Map();
   list.forEach((sale) => {
     sale.items?.forEach((it) => {
@@ -3916,6 +4396,50 @@ function openSaleEditModal(sale) {
 }
 
 
+function applyDebtPaymentToSales(targetSales = [], options = {}) {
+  const method = options.method || 'efectivo';
+  const paidAt = options.paidAt || new Date().toISOString();
+  const paidBy = options.paidBy || '-';
+  const cashBoxId = options.cashBoxId || '';
+  const totalDebtAmount = targetSales.reduce((sum, sale) => sum + Number(sale?.debtAmount || 0), 0);
+  let remainingCashMixed = method === 'mixto' ? Math.max(0, Math.min(totalDebtAmount, Number(options.mixedCashAmount || 0))) : 0;
+  const createdPayments = [];
+  targetSales.forEach((sale) => {
+    const amount = Number(sale?.debtAmount || 0);
+    if (amount <= 0) return;
+    let cashPaid = 0;
+    let qrPaid = 0;
+    if (method === 'efectivo') cashPaid = amount;
+    if (method === 'qr') qrPaid = amount;
+    if (method === 'mixto') {
+      cashPaid = Math.min(amount, remainingCashMixed);
+      qrPaid = amount - cashPaid;
+      remainingCashMixed -= cashPaid;
+    }
+    sale.debtAmount = 0;
+    sale.paymentStatus = 'realizado';
+    sale.modifiedAt = Date.now();
+    createdPayments.push({
+      id: uid(),
+      paidAt,
+      modifiedAt: Date.now(),
+      saleCreatedAt: sale.createdAt,
+      debtorId: sale.debtorId,
+      saleId: sale.id,
+      method,
+      amount,
+      cashAmount: cashPaid,
+      qrAmount: qrPaid,
+      cashBoxId,
+      paidBy,
+      archivado: false,
+      anulado: false,
+      anuladoPorVentaId: ''
+    });
+  });
+  return { totalDebtAmount, createdPayments };
+}
+
 function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
   document.getElementById('debtPayOverlay')?.remove();
   const overlay = document.createElement('div');
@@ -3923,7 +4447,9 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
   overlay.className = 'modal';
   overlay.innerHTML = `<div class="modal-card"><h3>Realizar pago</h3><div class="grid3"><label>Método<select id="dpMethod"><option value="efectivo">Efectivo</option><option value="qr">QR</option><option value="mixto">Mixto</option></select></label><label id="dpCashWrap" class="hidden">Efectivo<input id="dpCash" type="number" min="0" step="0.01" value="0" /></label><label id="dpQrWrap" class="hidden">QR<input id="dpQr" type="text" readonly value="Bs 0.00" /></label></div><div class="grid2"><button id="dpPayBtn" class="primary" type="button">Finalizar</button><button id="dpBackBtn" class="secondary" type="button">Atrás</button></div></div>`;
   document.body.appendChild(overlay);
-  const getTargetSales = () => saleIds.length ? state.sales.filter((s) => saleIds.includes(s.id)) : state.sales.filter((s) => s.debtorId === debtorId && Number(s.debtAmount || 0) > 0);
+  const getTargetSales = () => saleIds.length
+    ? state.sales.filter((s) => saleIds.includes(s.id) && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado')
+    : state.sales.filter((s) => s.debtorId === debtorId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
   const totalDebt = () => getTargetSales().reduce((a, s) => a + Number(s.debtAmount || 0), 0);
   const methodEl = document.getElementById('dpMethod');
   const cashEl = document.getElementById('dpCash');
@@ -3940,53 +4466,50 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
   cashEl?.addEventListener('input', sync);
   sync();
   document.getElementById('dpBackBtn')?.addEventListener('click', () => overlay.remove());
-  document.getElementById('dpPayBtn')?.addEventListener('click', () => {
+  document.getElementById('dpPayBtn')?.addEventListener('click', async () => {
+    console.info('[debt][pay-start]', { saleIds, debtorId });
     const method = methodEl?.value || 'efectivo';
     const targets = getTargetSales().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    if (!targets.length) { alert('No hay deudas pendientes para pagar.'); return; }
     const activeCash = getActiveCashBox();
-    const hasActiveCash = Boolean(activeCash);
-    const totalDebtAmount = targets.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
-    let remainingCashMixed = method === 'mixto' ? Math.max(0, Math.min(totalDebtAmount, Number(cashEl?.value || 0))) : 0;
-    targets.forEach((sale) => {
-      const amount = Number(sale.debtAmount || 0);
-      if (amount <= 0) return;
-      let cashPaid = 0;
-      let qrPaid = 0;
-      if (method === 'efectivo') cashPaid = amount;
-      if (method === 'qr') qrPaid = amount;
-      if (method === 'mixto') {
-        cashPaid = Math.min(amount, remainingCashMixed);
-        qrPaid = amount - cashPaid;
-        remainingCashMixed -= cashPaid;
-      }
-      sale.debtAmount = 0;
-      sale.paymentStatus = 'realizado';
-      state.debtPayments.unshift({
-        id: uid(),
-        paidAt: new Date().toISOString(),
-        saleCreatedAt: sale.createdAt,
-        debtorId: sale.debtorId,
-        saleId: sale.id,
-        method,
-        amount,
-        cashAmount: cashPaid,
-        qrAmount: qrPaid,
-        cashBoxId: hasActiveCash ? activeCash.id : '',
-        paidBy: state.currentUser?.username || '-',
-        archivado: false,
-        anulado: false,
-        anuladoPorVentaId: ''
-      });
+    const result = applyDebtPaymentToSales(targets, {
+      method,
+      mixedCashAmount: Number(cashEl?.value || 0),
+      paidAt: new Date().toISOString(),
+      paidBy: state.currentUser?.username || '-',
+      cashBoxId: activeCash?.id || ''
     });
-    persist();
+    if (result.totalDebtAmount <= 0 || !result.createdPayments.length) { alert('La deuda seleccionada ya fue saldada.'); return; }
+    state.debtPayments.unshift(...result.createdPayments.reverse());
+    targets.forEach((sale) => { if (sale?.id) pendingDebtSaleIds.add(String(sale.id)); });
+    result.createdPayments.forEach((payment) => { if (payment?.id) pendingDebtPaymentIds.add(String(payment.id)); });
+    markModulesDirty(['operations'], 'debt-payment-local');
+    persist({ module: 'sale', sync: false });
+    pendingDebtSyncChanges = true;
+    refreshPendingSyncButtons();
+    console.info('[debt][persist]', { debtPaymentsCount: state.debtPayments?.length || 0 });
     renderDebtors();
+    renderSalesHistory();
     renderSummary();
-  renderSoldProductsList();
+    renderSoldProductsList();
     renderDebtPayments();
     overlay.remove();
   });
 }
 
+function confirmSaleAnnulment(sale) {
+  return new Promise((resolve) => {
+    document.getElementById('annulSaleOverlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'annulSaleOverlay';
+    overlay.className = 'modal';
+    overlay.innerHTML = `<div class="modal-card"><h3>Anular venta</h3><p>¿Estás seguro de anular la venta?</p><p><strong>Pedido #${orderNumberLabel(sale?.orderNumber)}</strong></p><div class="grid2"><button id="cancelAnnulSaleBtn" class="secondary" type="button">Cancelar</button><button id="confirmAnnulSaleBtn" class="danger" type="button">Anular</button></div></div>`;
+    document.body.appendChild(overlay);
+    const close = (value) => { overlay.remove(); resolve(value); };
+    document.getElementById('cancelAnnulSaleBtn')?.addEventListener('click', () => close(false));
+    document.getElementById('confirmAnnulSaleBtn')?.addEventListener('click', () => close(true));
+  });
+}
 
 function activeDebtPayments() {
   return (state.debtPayments || []).filter((p) => !p?.anulado);
@@ -4013,6 +4536,7 @@ function saleRecordForPayment(payment) {
 
 function renderDebtPayments() {
   if (!debtPaymentsTable) return;
+  console.info('[debt][render]', { mode: state.debtPaymentsView || 'history', paymentsCount: state.debtPayments?.length || 0 });
   state.debtPaymentsView = state.debtPaymentsView || 'history';
   state.activeDebtorPaymentsId = state.activeDebtorPaymentsId || '';
   if (debtPaymentsHistoryCard && !document.getElementById('debtPaymentsNav')) {
@@ -4117,43 +4641,41 @@ function renderDebtPayments() {
 }
 
 
+function stripHeavyDataUrl(value) {
+  const raw = String(value || '');
+  if (!raw.startsWith('data:image/')) return value;
+  return '';
+}
+
+function sanitizeCloudPayload(payload, remotePayload = {}) {
+  const out = { ...payload };
+  out.settings = { ...(payload.settings || {}) };
+  if (out.settings.billing && typeof out.settings.billing === 'object') out.settings.billing = { ...out.settings.billing };
+  const remoteSettings = (remotePayload && typeof remotePayload === 'object') ? (remotePayload.settings || {}) : {};
+  const remoteBilling = (remoteSettings && typeof remoteSettings.billing === 'object') ? remoteSettings.billing : {};
+  if (isMeaningfullyEmpty(out.settings.logoDataUrl) && !isMeaningfullyEmpty(remoteSettings.logoDataUrl)) out.settings.logoDataUrl = remoteSettings.logoDataUrl;
+  if (out.settings.billing && isMeaningfullyEmpty(out.settings.billing.logoDataUrl) && !isMeaningfullyEmpty(remoteBilling.logoDataUrl)) out.settings.billing.logoDataUrl = remoteBilling.logoDataUrl;
+  out.products = (payload.products || []).map((p) => ({ ...p, imageDataUrl: stripHeavyDataUrl(p?.imageDataUrl) }));
+  out.categoryImages = Object.fromEntries(Object.entries(payload.categoryImages || {}).map(([k, v]) => {
+    const sanitized = stripHeavyDataUrl(v);
+    if (isMeaningfullyEmpty(sanitized) && !isMeaningfullyEmpty(remotePayload?.categoryImages?.[k])) return [k, remotePayload.categoryImages[k]];
+    return [k, sanitized];
+  }));
+  console.info('[cloud][images]', {
+    strippedMainLogo: Boolean(payload?.settings?.logoDataUrl && !out.settings.logoDataUrl),
+    strippedBillingLogo: Boolean(payload?.settings?.billing?.logoDataUrl && !out.settings?.billing?.logoDataUrl)
+  });
+  return out;
+}
+
 function snapshotPayload() {
-  return {
-    products: state.products,
-    sales: state.sales,
-    deletedSales: state.deletedSales,
-    cashClosings: state.cashClosings,
-    cashSession: state.cashSession,
-    users: state.users,
-    settings: state.settings,
-    categories: state.categories,
-    subcategories: state.subcategories || {},
-    people: state.people,
-    stockConfig: state.stockConfig,
-    outflows: state.outflows,
-    debtPayments: state.debtPayments,
-    components: state.components,
-    componentLinks: state.componentLinks,
-    componentMoves: state.componentMoves,
-    cashBoxes: state.cashBoxes,
-    activeCashBoxId: state.activeCashBoxId || '',
-    systemStatus: state.systemStatus || 'CAJA_CERRADA',
-    forceLogoutAt: Number(state.forceLogoutAt || 0),
-    userSalesModes: state.userSalesModes || {},
-    touchUiConfigByUser: state.touchUiConfigByUser || {},
-    categoryImages: state.categoryImages || {},
-    orderCounters: state.orderCounters || {},
-    deletedRecordIds: state.deletedRecordIds || { cashClosings: [], sales: [] },
-    generalCash: state.generalCash || { efectivo: 0, qr: 0, estado: 'CERRADA', openedAt: '', closedAt: '', openedBy: '', closedBy: '', updatedAt: 0 },
-    generalClosings: state.generalClosings || [],
-    moduleUpdatedAt: state.moduleUpdatedAt || {},
-    moduleHydration: state.moduleHydration || {},
-    updatedAt: Date.now()
-  };
+  return cloudModulePayloadFromState();
 }
 
 
 function mergeByIdPreferRemote(remoteList = [], localList = [], tombstones = []) {
+  remoteList = normalizeCollectionToArray(remoteList);
+  localList = normalizeCollectionToArray(localList);
   const map = new Map();
   const removed = new Set((tombstones || []).map((x) => String(x)));
   (remoteList || []).forEach((item) => {
@@ -4170,8 +4692,87 @@ function mergeByIdPreferRemote(remoteList = [], localList = [], tombstones = [])
   return [...map.values()];
 }
 
+function mergeByIdPreferLocal(remoteList = [], localList = [], tombstones = []) {
+  remoteList = normalizeCollectionToArray(remoteList);
+  localList = normalizeCollectionToArray(localList);
+  const map = new Map();
+  const removed = new Set((tombstones || []).map((x) => String(x)));
+  remoteList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key)) return;
+    map.set(key, item);
+  });
+  localList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key)) return;
+    map.set(key, item);
+  });
+  return [...map.values()];
+}
+
+function recordTimestamp(item = {}) {
+  const modified = Number(item?.modifiedAt || 0);
+  const created = Date.parse(item?.createdAt || '') || 0;
+  const paid = Date.parse(item?.paidAt || '') || 0;
+  return Math.max(modified, created, paid, 0);
+}
+
+function mergeByIdLatest(remoteList = [], localList = [], tombstones = []) {
+  remoteList = normalizeCollectionToArray(remoteList);
+  localList = normalizeCollectionToArray(localList);
+  const map = new Map();
+  const removed = new Set((tombstones || []).map((x) => String(x)));
+  remoteList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key)) return;
+    map.set(key, item);
+  });
+  localList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key)) return;
+    const remote = map.get(key);
+    if (!remote || recordTimestamp(item) >= recordTimestamp(remote)) map.set(key, item);
+  });
+  return [...map.values()];
+}
+
+function mergeByIdLatestPreservingLocalOrder(remoteList = [], localList = [], tombstones = []) {
+  remoteList = normalizeCollectionToArray(remoteList);
+  localList = normalizeCollectionToArray(localList);
+  const removed = new Set((tombstones || []).map((x) => String(x)));
+  const remoteMap = new Map();
+  remoteList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key)) return;
+    remoteMap.set(key, item);
+  });
+  const ordered = [];
+  const seen = new Set();
+  localList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key) || seen.has(key)) return;
+    const remote = remoteMap.get(key);
+    ordered.push(!remote || recordTimestamp(item) >= recordTimestamp(remote) ? item : remote);
+    seen.add(key);
+  });
+  remoteList.forEach((item) => {
+    if (!item?.id) return;
+    const key = String(item.id);
+    if (removed.has(key) || seen.has(key)) return;
+    ordered.push(item);
+    seen.add(key);
+  });
+  return ordered;
+}
+
 function mergeDeletedRecordIds(remoteDeleted = {}, localDeleted = {}) {
-  const keys = ['cashClosings', 'sales'];
+  const keys = ['cashClosings', 'sales', 'products', 'categories'];
   const out = {};
   keys.forEach((key) => {
     const remote = Array.isArray(remoteDeleted?.[key]) ? remoteDeleted[key] : [];
@@ -4205,242 +4806,178 @@ function mergeCashBoxes(remoteBoxes = [], localBoxes = []) {
   return [...map.values()];
 }
 
-function buildCloudSyncError(message, extras = {}) {
-  const err = new Error(message || 'Error de sincronización en la nube.');
-  Object.assign(err, extras || {});
-  return err;
+function cashStateVersionOf(source = {}) {
+  const explicit = Number(source?.cashStateVersion || 0);
+  const updated = Number(source?.cashStateUpdatedAt || 0);
+  const general = Number(source?.generalCash?.updatedAt || 0);
+  return Math.max(explicit, updated, updated || general, 0);
 }
 
-function describeCloudSyncError(err) {
-  const status = Number(err?.status || 0);
-  if (status === 401 || status === 403) return 'Credenciales inválidas o reglas de Firebase bloquean escritura (401/403).';
-  if (status === 404) return 'URL o ruta de base de datos no existe (404).';
-  if (status === 412) return 'Conflicto de versión de datos (412).';
-  if (status >= 500) return `Servidor respondió con error ${status}.`;
-  if (String(err?.message || '').includes('Failed to fetch')) return 'No se pudo conectar a internet o al host configurado.';
-  return String(err?.message || 'Error desconocido de sincronización.');
-}
-
-async function safeJsonResponse(resp) {
-  try { return await resp.json(); } catch { return null; }
+function mergeCashOperationsState(remoteModule = {}, localModule = {}) {
+  const remoteVersion = cashStateVersionOf(remoteModule);
+  const localVersion = cashStateVersionOf(localModule);
+  const winner = localVersion > remoteVersion ? localModule : remoteModule;
+  const loser = winner === remoteModule ? localModule : remoteModule;
+  const mergedCashBoxes = mergeCashBoxes(remoteModule?.cashBoxes, localModule?.cashBoxes);
+  let activeCandidate = String(winner?.activeCashBoxId || '');
+  const openBoxes = normalizeCollectionToArray(mergedCashBoxes).filter((box) => box?.estado === 'ABIERTA');
+  const activeExists = openBoxes.some((box) => box?.id === activeCandidate);
+  if (!activeExists && openBoxes.length) {
+    activeCandidate = [...openBoxes].sort((a, b) => cashBoxTimelineValue(b) - cashBoxTimelineValue(a))[0]?.id || '';
+  }
+  return {
+    cashBoxes: collectionToObjectById(mergedCashBoxes),
+    activeCashBoxId: activeCandidate || '',
+    systemStatus: activeCandidate ? 'CAJA_ABIERTA' : 'CAJA_CERRADA',
+    cashSession: winner?.cashSession || loser?.cashSession || null,
+    generalCash: winner?.generalCash || loser?.generalCash || localModule?.generalCash || remoteModule?.generalCash || null,
+    generalClosings: Array.isArray(winner?.generalClosings) ? winner.generalClosings : (Array.isArray(loser?.generalClosings) ? loser.generalClosings : []),
+    cashStateVersion: Math.max(remoteVersion, localVersion, 0),
+    cashStateUpdatedAt: Math.max(Number(winner?.cashStateUpdatedAt || 0), Number(loser?.cashStateUpdatedAt || 0), 0)
+  };
 }
 
 async function syncToCloud(options = {}) {
-  const conn = cloudConnection();
-  if (!conn.rootUrl) throw buildCloudSyncError('No hay URL de nube configurada.', { code: 'CLOUD_URL_MISSING' });
-  if (cloudSyncInFlight) return cloudSyncInFlight;
-  cloudSyncInFlight = (async () => {
-  try {
-    const url = conn.rootUrl;
-    const remoteResp = await fetch(url, { headers: { ...conn.headers, 'X-Firebase-ETag': 'true' } });
-    if (!remoteResp.ok) {
-      const remoteText = await remoteResp.text().catch(() => '');
-      throw buildCloudSyncError(`No se pudo leer estado remoto (${remoteResp.status}).`, { status: remoteResp.status, responseText: remoteText });
-    }
-    const remoteData = await safeJsonResponse(remoteResp) || {};
-    const remoteEtag = remoteResp.headers.get('ETag');
-    const remoteUpdatedAt = Number(remoteData?.updatedAt || 0);
-    const payload = snapshotPayload();
-    const remoteModuleUpdatedAt = remoteData?.moduleUpdatedAt || {};
-    const candidateModules = [...dirtyModules];
-    if (!candidateModules.length) {
-      addSyncLog('info', 'Sync omitido: no hay módulos hidratados pendientes.', { dirty: [...dirtyModules] });
-      return;
-    }
-    const mergedDeleted = mergeDeletedRecordIds(remoteData?.deletedRecordIds, payload.deletedRecordIds);
-    payload.deletedRecordIds = mergedDeleted;
-    payload.sales = mergeByIdPreferRemote(remoteData?.sales, payload.sales, mergedDeleted.sales);
-    payload.cashClosings = mergeByIdPreferRemote(remoteData?.cashClosings, payload.cashClosings, mergedDeleted.cashClosings);
-    payload.deletedSales = mergeByIdPreferRemote(remoteData?.deletedSales, payload.deletedSales);
-    payload.outflows = mergeByIdPreferRemote(remoteData?.outflows, payload.outflows);
-    payload.debtPayments = mergeByIdPreferRemote(remoteData?.debtPayments, payload.debtPayments);
-    payload.cashBoxes = mergeCashBoxes(remoteData?.cashBoxes, payload.cashBoxes);
-    payload.generalClosings = mergeByIdPreferRemote(remoteData?.generalClosings, payload.generalClosings);
-    if (Number(remoteData?.generalCash?.updatedAt || 0) > Number(payload.generalCash?.updatedAt || 0)) payload.generalCash = remoteData.generalCash;
-    if (!payload.activeCashBoxId && remoteData?.activeCashBoxId) payload.activeCashBoxId = remoteData.activeCashBoxId;
-    if (payload.systemStatus === 'CAJA_CERRADA' && remoteData?.systemStatus === 'CAJA_ABIERTA' && payload.activeCashBoxId === remoteData.activeCashBoxId) {
-      payload.systemStatus = remoteData.systemStatus;
-      payload.cashSession = remoteData.cashSession || payload.cashSession;
-    }
-    const patchBody = {};
-    candidateModules.forEach((moduleName) => {
-      const moduleData = modulePayload(moduleName, payload);
-      if (shouldBlockModuleWrite(moduleName, moduleData, remoteData?.[moduleName] || {})) {
-        addSyncLog('warn', 'Write bloqueado por versión remota más reciente.', {
-          module: moduleName,
-          reason: 'payload vacío'
-        });
-        return;
+  if (!state.settings.firebaseDbUrl) return;
+  await ensureCloudSeedData();
+  console.info('[cloud][sync] inicio modular');
+  const makeSyncError = (code, stage, status, message, extra = {}) => Object.assign(new Error(message), { code, stage, status, ...extra });
+  const token = normalizedFirebaseToken();
+  const authModes = token ? [true, false] : [false];
+  let lastError = null;
+  const modules = Array.isArray(options.modules) && options.modules.length
+    ? options.modules
+    : ['config', 'catalog', 'operations', 'warehouse'];
+  const includeHistory = Boolean(options.includeHistory);
+  if (includeHistory && !modules.includes('history')) modules.push('history');
+
+  for (const includeToken of authModes) {
+    const modeLabel = includeToken ? 'token' : 'sin-token';
+    try {
+      const localModules = snapshotPayload();
+      for (const moduleName of modules) {
+        const path = CLOUD_MODULE_PATHS[moduleName];
+        if (!path) continue;
+        let remoteModule = {};
+        try {
+          remoteModule = await cloudReadPath(path, { includeToken }) || {};
+        } catch (err) {
+          if (includeToken && [401, 403].includes(Number(err?.status || 0))) throw err;
+          remoteModule = {};
+        }
+        const localModule = localModules[moduleName] || {};
+        let payload = { ...localModule };
+        if (moduleName === 'catalog') {
+          const mergedProducts = mergeByIdLatestPreservingLocalOrder(remoteModule?.products, localModule?.products, state.deletedRecordIds?.products);
+          payload.products = collectionToObjectById(mergedProducts);
+        } else if (moduleName === 'operations') {
+          const mergedSales = mergeByIdLatest(remoteModule?.sales, localModule?.sales, state.deletedRecordIds?.sales);
+          const mergedOutflows = mergeByIdLatest(remoteModule?.outflows, localModule?.outflows);
+          const mergedDebt = mergeByIdLatest(remoteModule?.debtPayments, localModule?.debtPayments);
+          const mergedCashState = mergeCashOperationsState(remoteModule, localModule);
+          payload.sales = collectionToObjectById(mergedSales);
+          payload.outflows = collectionToObjectById(mergedOutflows);
+          payload.debtPayments = collectionToObjectById(mergedDebt);
+          Object.assign(payload, mergedCashState);
+        } else if (moduleName === 'warehouse') {
+          const mergedComponents = mergeByIdLatest(remoteModule?.components, localModule?.components);
+          payload.components = collectionToObjectById(mergedComponents);
+          payload.componentLinks = { ...(remoteModule?.componentLinks || {}), ...(localModule?.componentLinks || {}) };
+        } else if (moduleName === 'history') {
+          const mergedDeleted = mergeDeletedRecordIds(remoteModule?.deletedRecordIds, localModule?.deletedRecordIds);
+          payload.deletedRecordIds = mergedDeleted;
+          payload.cashClosings = collectionToObjectById(mergeByIdPreferRemote(remoteModule?.cashClosings, localModule?.cashClosings, mergedDeleted.cashClosings));
+          payload.deletedSales = collectionToObjectById(mergeByIdPreferRemote(remoteModule?.deletedSales, localModule?.deletedSales));
+          payload.componentMoves = collectionToObjectById(mergeByIdPreferRemote(remoteModule?.componentMoves, localModule?.componentMoves));
+        } else if (moduleName === 'config') {
+          payload = sanitizeCloudPayload(payload, remoteModule);
+          const removedCategories = new Set((state.deletedRecordIds?.categories || []).map((x) => String(x).trim()).filter(Boolean));
+          if (removedCategories.size) {
+            payload.categories = (payload.categories || []).filter((category) => !removedCategories.has(String(category || '').trim()));
+            payload.categoryImages = Object.fromEntries(Object.entries(payload.categoryImages || {}).filter(([category]) => !removedCategories.has(String(category || '').trim())));
+          }
+        }
+        payload.updatedAt = Math.max(Number(payload.updatedAt || 0), Number(remoteModule?.updatedAt || 0), Date.now());
+        if (shouldBlockModuleWrite(moduleName, payload, remoteModule)) continue;
+        await cloudWritePath(path, payload, { includeToken, method: 'PUT' });
+        recordModuleWrite(moduleName, payload, options.reason || 'sync');
+        markModuleHydrated(moduleName, true, { source: 'local-sync' });
       }
-      patchBody[moduleName] = moduleData;
-      patchBody.moduleUpdatedAt = { ...(patchBody.moduleUpdatedAt || remoteModuleUpdatedAt), [moduleName]: Number(payload.moduleUpdatedAt?.[moduleName] || Date.now()) };
-    });
-    if (!Object.keys(patchBody).length) {
-      addSyncLog('info', 'Sync omitido: todos los módulos estaban desfasados frente al remoto.', { candidateModules });
+      state.lastSyncAt = Date.now();
+      saveLocalState();
+      if (syncStatus) syncStatus.textContent = 'Sincronización enviada.';
+      if (token && !includeToken) console.info('[sync][token] Sincronización exitosa ignorando token (token innecesario o inválido).');
+      console.info('[cloud][sync] fin modular', { modules });
       return;
+    } catch (err) {
+      lastError = err;
+      if (syncStatus) syncStatus.textContent = 'Error de sincronización.';
+      const status = Number(err?.status || 0);
+      if (includeToken && (status === 401 || status === 403)) {
+        console.warn('[sync][token] Fallo de autenticación con token. Reintentando sin token.', { status, message: err?.message });
+        continue;
+      }
+      console.error('[sync][rtdb] Error en sincronización.', { modeLabel, code: err?.code, status: err?.status, stage: err?.stage, message: err?.message });
+      console.error('[cloud][sync] error', { message: err?.message, code: err?.code, status: err?.status });
+      break;
     }
-    patchBody.updatedAt = Math.max(Date.now(), remoteUpdatedAt + 1);
-    const patchHeaders = { ...conn.headers, 'Content-Type': 'application/json' };
-    if (remoteEtag) patchHeaders['if-match'] = remoteEtag;
-    const patchResp = await fetch(url, { method: 'PATCH', headers: patchHeaders, body: JSON.stringify(patchBody) });
-    if (patchResp.status === 412) {
-      if (Number(options.attempt || 0) < 2) return syncToCloud({ ...options, attempt: Number(options.attempt || 0) + 1 });
-      if (syncStatus) syncStatus.textContent = 'Conflicto detectado. Reintenta sincronizar.';
-      throw buildCloudSyncError('Conflicto de sincronización.', { status: 412, code: 'SYNC_CONFLICT' });
-    }
-    if (!patchResp.ok) {
-      const patchText = await patchResp.text().catch(() => '');
-      throw buildCloudSyncError(`No se pudo guardar en la nube (${patchResp.status}).`, { status: patchResp.status, responseText: patchText });
-    }
-    candidateModules.forEach((moduleName) => dirtyModules.delete(moduleName));
-    state.lastSyncAt = Number(patchBody.updatedAt || Date.now());
-    saveLocalState();
-    if (syncStatus) syncStatus.textContent = 'Sincronización enviada.';
-    addSyncLog('info', 'Sincronización PATCH aplicada.', { modules: candidateModules });
-  } catch (err) {
-    const detail = describeCloudSyncError(err);
-    if (syncStatus) syncStatus.textContent = `Error de sincronización: ${detail}`;
-    addSyncLog('error', 'Error en sincronización.', { detail });
-    throw err;
-  } finally {
-    cloudSyncInFlight = null;
   }
-  })();
-  return cloudSyncInFlight;
+  throw lastError || new Error('sync unknown failure');
 }
 
-
-function applyCloudData(data, options = {}) {
-  if (!data || !data.updatedAt) return;
-  const modulesData = (data.config || data.catalog || data.operations || data.warehouse || data.history)
-    ? { config: data.config || null, catalog: data.catalog || null, operations: data.operations || null, warehouse: data.warehouse || null, history: data.history || null }
-    : null;
-  if (modulesData) {
-    const nonEmptyModules = Object.values(modulesData).filter((chunk) => chunk && typeof chunk === 'object' && Object.keys(chunk).length > 0);
-    if (!nonEmptyModules.length) return;
-  }
-  const incoming = modulesData
-    ? flattenModulesData(modulesData, { updatedAt: data.updatedAt, moduleUpdatedAt: data.moduleUpdatedAt, moduleHydration: data.moduleHydration, forceLogoutAt: data.forceLogoutAt })
-    : data;
-  if (!incoming || (typeof incoming === 'object' && Object.keys(incoming).length === 0)) return;
-  if (!options.force && incoming.updatedAt <= state.lastSyncAt) return;
-  state.lastSyncAt = Number(incoming.updatedAt || Date.now());
-  state.forceLogoutAt = Number(incoming.forceLogoutAt || 0);
-  ALL_MODULES.forEach((moduleName) => validateAndNormalizeModuleData(moduleName, incoming));
-  ['products','sales','deletedSales','cashClosings','cashSession','users','settings','categories','subcategories','people','stockConfig','outflows','debtPayments','components','componentLinks','componentMoves','cashBoxes','activeCashBoxId','systemStatus','userSalesModes','touchUiConfigByUser','categoryImages','orderCounters','deletedRecordIds','generalCash','generalClosings','moduleUpdatedAt','moduleHydration'].forEach((k) => {
-    if (incoming[k] !== undefined) state[k] = incoming[k];
-  });
-  if (state.currentUser && !validateSessionPolicy({ silent: true })) return;
-  normalizeCloudSettings();
-  normalizeWarehouseData();
-  normalizeDebtPaymentsData();
-  normalizePeopleData();
-  normalizeCashState();
-  buildStateIndexes();
-  markModulesHydrated(ALL_MODULES);
-  const removedClosings = new Set((state.deletedRecordIds?.cashClosings || []).map((x) => String(x)));
-  const removedSales = new Set((state.deletedRecordIds?.sales || []).map((x) => String(x)));
-  if (removedClosings.size) state.cashClosings = (state.cashClosings || []).filter((x) => !removedClosings.has(String(x?.id || '')));
-  if (removedSales.size) state.sales = (state.sales || []).filter((x) => !removedSales.has(String(x?.id || '')));
-  syncAppConfig();
-  saveLocalState();
-  renderOrdersVisibility();
-  renderProducts(); renderOrders(false); renderSalesHistory(); renderDeletedSales(); renderDebtors(); renderDebtPayments(); renderWarehouse(); renderSummary(); renderCashStatus(); renderHomeActions();
-  cloudHydrated = true;
-}
-
-let firebaseRealtimeRootRef = null;
-let firebaseChildRefs = [];
-async function startFirebaseRealtimeListener() {
-  if (state.settings?.cloudProvider && state.settings.cloudProvider !== 'firebase') return;
-  const rootRef = getFirebaseRealtimeRef('');
-  firebaseRealtimeRootRef = rootRef;
-  firebaseChildRefs.forEach((x) => x.ref.off(x.event, x.handler));
-  firebaseChildRefs = [];
-  const refreshAfterRealtimeChange = () => {
-    normalizeCloudSettings();
-    normalizeWarehouseData();
-    normalizeDebtPaymentsData();
-    normalizePeopleData();
-    normalizeCashState();
-    syncAppConfig();
-    renderOrdersVisibility();
-    renderProducts(); renderOrders(false); renderSalesHistory(); renderDeletedSales(); renderDebtors(); renderDebtPayments(); renderWarehouse(); renderSummary(); renderCashStatus(); renderHomeActions();
-    applySettings();
-    renderSubCategoryParents();
-    renderSubCategoriesTable();
-  };
-  const applyChild = (snap) => {
-    const key = String(snap.key || '');
-    if (!key) return;
-    const val = snap.val();
-    if (ALL_MODULES.includes(key) && val && typeof val === 'object') {
-      Object.entries(val).forEach(([innerKey, innerVal]) => { state[innerKey] = innerVal; });
-      markModulesHydrated([key]);
-    } else {
-      state[key] = val;
-      const moduleName = MODULE_BY_KEY[key];
-      if (moduleName) markModulesHydrated([moduleName]);
-    }
-    buildStateIndexes();
-    refreshAfterRealtimeChange();
-  };
-  const removeChild = (snap) => {
-    const key = String(snap.key || '');
-    if (!key) return;
-    delete state[key];
-    refreshAfterRealtimeChange();
-  };
-  ['child_added','child_changed'].forEach((event) => {
-    const handler = (snap) => applyChild(snap);
-    rootRef.on(event, handler);
-    firebaseChildRefs.push({ ref: rootRef, event, handler });
-  });
-  const removedHandler = (snap) => removeChild(snap);
-  rootRef.on('child_removed', removedHandler);
-  firebaseChildRefs.push({ ref: rootRef, event: 'child_removed', handler: removedHandler });
-}
 
 async function pullFromCloud(options = {}) {
-  const conn = cloudConnection();
-  if (!conn.rootUrl) return;
+  if (!state.settings.firebaseDbUrl) return;
+  await ensureCloudSeedData();
+  console.info('[cloud][pull] inicio', { force: Boolean(options.force), modules: options.modules || 'default' });
   const now = Date.now();
   if (!options.force && (now - lastCloudPullAt) < CLOUD_PULL_MIN_INTERVAL_MS) return;
   if (cloudPullInFlight) return cloudPullInFlight;
   cloudPullInFlight = (async () => {
   try {
     lastCloudPullAt = Date.now();
-    const rootUrl = conn.rootUrl;
-    if (!options.force && conn.provider === 'firebase') {
-      const stampResp = await fetch(rootUrl.replace(/\.json(\?.*)?$/, '/updatedAt.json$1'));
-      const remoteStamp = Number(await stampResp.json() || 0);
-      if (!remoteStamp || remoteStamp <= Number(state.lastSyncAt || 0)) return;
-    }
-    const r = await fetch(rootUrl, { headers: { ...conn.headers } });
-    const data = await r.json();
-    const modulesData = (data?.config || data?.catalog || data?.operations || data?.warehouse || data?.history)
-      ? { config: data.config || {}, catalog: data.catalog || {}, operations: data.operations || {}, warehouse: data.warehouse || {}, history: data.history || {} }
-      : null;
-    if (modulesData) {
-      if (!modulesData || Object.keys(modulesData).length === 0) return;
-      const currentModules = localModulesSnapshot();
-      const mergedModules = { ...currentModules };
-      for (const key in modulesData) {
-        if (modulesData[key] && Object.keys(modulesData[key]).length > 0) {
-          mergedModules[key] = modulesData[key];
+    const modules = Array.isArray(options.modules) && options.modules.length
+      ? options.modules
+      : ['config', 'catalog', 'operations', 'warehouse'];
+    if (Boolean(options.includeHistory) && !modules.includes('history')) modules.push('history');
+    const token = normalizedFirebaseToken();
+    const authModes = token ? [true, false] : [false];
+    let modulesData = null;
+    for (const includeToken of authModes) {
+      try {
+        const next = {};
+        let changedAny = false;
+        for (const moduleName of modules) {
+          const path = CLOUD_MODULE_PATHS[moduleName];
+          if (!path) continue;
+          const localStamp = getModuleUpdatedAt(moduleName);
+          if (!options.force) {
+            const stamp = await fetchModuleUpdatedAt(moduleName, { includeToken, reason: options.reason || 'pull' });
+            if (stamp && stamp <= localStamp) {
+              console.info('[cloud][pull-skip]', { moduleName, stamp, localStamp, reason: options.reason || 'pull' });
+              continue;
+            }
+          }
+          next[moduleName] = await cloudReadPath(path, { includeToken }) || {};
+          recordModuleRead(moduleName, next[moduleName], options.reason || 'pull');
+          markModuleHydrated(moduleName, true, { source: 'cloud-pull' });
+          changedAny = true;
         }
+        if (!changedAny && !options.force) return;
+        modulesData = next;
+        break;
+      } catch (err) {
+        if (includeToken && [401, 403].includes(Number(err?.status || 0))) continue;
+        throw err;
       }
-      const mergedFlat = flattenModulesData(mergedModules, {
-        updatedAt: Number(data?.updatedAt || Date.now()),
-        moduleUpdatedAt: data?.moduleUpdatedAt || state.moduleUpdatedAt || {},
-        moduleHydration: data?.moduleHydration || state.moduleHydration || {},
-        forceLogoutAt: Number(data?.forceLogoutAt || state.forceLogoutAt || 0)
-      });
-      applyCloudData(mergedFlat, { force: options.force });
-    } else {
-      applyCloudData(data, { force: options.force });
     }
-    console.info('[cloud] estado sincronizado', { activeCashBoxId: state.activeCashBoxId, systemStatus: state.systemStatus });
+    if (!modulesData) throw new Error('[pull] No fue posible leer RTDB con token ni sin token.');
+    const currentModules = cloudModulePayloadFromState();
+    const mergedModules = { ...currentModules, ...modulesData };
+    applyCloudData(mergedModules);
+    console.info('[sale][pull]', { salesCount: Array.isArray(state.sales) ? state.sales.length : -1, activeCashBoxId: state.activeCashBoxId || '' });
+    console.info('[cloud][pull] fin', { updatedAt: state.lastSyncAt, modules });
+    console.info('[cloud] estado sincronizado', { activeCashBoxId: state.activeCashBoxId, systemStatus: state.systemStatus, modules });
     const currentRoute = normalizeRoute(window.location.hash || '#home');
     const inSettingsBranch = currentRoute === 'settings' || currentRoute.startsWith('settings/');
     const inPosBranch = currentRoute.startsWith('pos/') || currentRoute === 'cash/closings';
@@ -4448,7 +4985,9 @@ async function pullFromCloud(options = {}) {
       maybeForceLogoutFromClosure();
     }
     applyRoute();
-  } catch {}
+  } catch (err) {
+    console.error('[sync][rtdb][pull] Fallo en pullFromCloud', { code: err?.code, status: err?.status, message: err?.message });
+  }
   finally {
     cloudPullInFlight = null;
   }
@@ -4456,49 +4995,11 @@ async function pullFromCloud(options = {}) {
   return cloudPullInFlight;
 }
 
-async function ensureCloudSeedData() {
-  const conn = cloudConnection();
-  if (!conn.rootUrl) return;
-  try {
-    const resp = await fetch(conn.rootUrl, { headers: { ...conn.headers } });
-    const remote = (await safeJsonResponse(resp)) || {};
-    const needed = ['config', 'catalog', 'operations', 'warehouse', 'history'];
-    const missing = needed.filter((moduleName) => !remote?.[moduleName] || typeof remote[moduleName] !== 'object');
-    if (!missing.length) return;
-    const localModules = localModulesSnapshot();
-    const seedPayload = {};
-    missing.forEach((moduleName) => { seedPayload[moduleName] = localModules[moduleName] || {}; });
-    seedPayload.updatedAt = Date.now();
-    seedPayload.moduleUpdatedAt = { ...(remote?.moduleUpdatedAt || {}), ...(state.moduleUpdatedAt || {}) };
-    await fetch(conn.rootUrl, {
-      method: 'PATCH',
-      headers: { ...conn.headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify(seedPayload)
-    });
-    addSyncLog('info', 'Seed modular aplicado en nube.', { missing });
-  } catch (err) {
-    addSyncLog('warn', 'No se pudo aplicar seed modular en nube.', { error: String(err?.message || err) });
-  }
-}
-
 function renderHomeActions() {
   const active = isCashOpen();
-  const generalOpen = isGeneralCashOpen();
-  const openGeneralCashBtn = document.getElementById('openGeneralCashBtn');
-  const closeGeneralCashBtn = document.getElementById('closeGeneralCashBtn');
-  const homeOutflowsBtn = document.getElementById('homeOutflowsBtn');
   if (goSalesBtn) goSalesBtn.classList.toggle('hidden', !active || !hasPermission('viewSalesButton'));
-  if (closeCashBtn) {
-    closeCashBtn.textContent = 'Cerrar caja del día';
-    closeCashBtn.classList.toggle('hidden', !active || !canCloseCash() || !hasPermission('viewCloseCashButton'));
-  }
-  if (startCashBtn) {
-    startCashBtn.textContent = 'Abrir caja del día';
-    startCashBtn.classList.toggle('hidden', active || !generalOpen || !canOpenCash());
-  }
-  if (openGeneralCashBtn) openGeneralCashBtn.classList.toggle('hidden', generalOpen || !canManageGeneralCash());
-  if (closeGeneralCashBtn) closeGeneralCashBtn.classList.toggle('hidden', !generalOpen || !canManageGeneralCash());
-  if (homeOutflowsBtn) homeOutflowsBtn.classList.toggle('hidden', !state.currentUser);
+  if (closeCashBtn) closeCashBtn.classList.toggle('hidden', !active || !canCloseCash() || !hasPermission('viewCloseCashButton'));
+  if (startCashBtn) startCashBtn.classList.toggle('hidden', active || !canOpenCash());
   if (openSettingsBtn) openSettingsBtn.classList.toggle('hidden', !hasPermission('accessSettings') || !hasPermission('viewSettingsButton'));
   if (goCashClosingsBtn) goCashClosingsBtn.classList.toggle('hidden', !hasPermission('viewClosingsTab'));
   if (goWarehouseBtn) goWarehouseBtn.classList.toggle('hidden', !hasPermission('viewWarehouseButton'));
@@ -4508,10 +5009,8 @@ function renderHomeActions() {
   if (sessionInfo) sessionInfo.textContent = user ? `Usuario activo: ${user.username}` : 'Sin sesión';
   if (posSessionInfo) posSessionInfo.textContent = user ? `Usuario: ${user.username}` : 'Usuario: -';
 
-  if (!generalOpen) {
-    setMsg(homeMessage, 'La caja general está cerrada. Debes abrirla para operar.', false);
-  } else if (!active) {
-    setMsg(homeMessage, 'La caja del día está cerrada. Espera a que un usuario autorizado la abra.', false);
+  if (!active) {
+    setMsg(homeMessage, 'La caja está cerrada. Espera a que un usuario autorizado la abra.', false);
   } else if (homeMessage?.textContent.includes('caja')) {
     setMsg(homeMessage, '');
   }
@@ -4550,16 +5049,26 @@ function showLogin() {
   homeScreen?.classList.add('hidden');
   posScreen?.classList.add('hidden');
   stockScreen?.classList.add('hidden');
+  warehouseScreen?.classList.add('hidden');
   if (loginUserInput) loginUserInput.value = '';
   if (loginPassInput) loginPassInput.value = '';
   setMsg(loginMessage, '');
 }
 function showHome() {
+  console.info('[nav][render-home]');
   loginScreen?.classList.add('hidden');
   homeScreen?.classList.remove('hidden');
   posScreen?.classList.add('hidden');
   stockScreen?.classList.add('hidden');
+  warehouseScreen?.classList.add('hidden');
+  Array.from(homeScreen?.children || []).forEach((el) => el.classList.remove('hidden'));
   settingsCard?.classList.add('hidden');
+  console.info('[nav][screen-state]', {
+    loginHidden: loginScreen?.classList.contains('hidden'),
+    homeHidden: homeScreen?.classList.contains('hidden'),
+    posHidden: posScreen?.classList.contains('hidden'),
+    settingsHidden: settingsCard?.classList.contains('hidden')
+  });
   renderHomeActions();
   renderTabsByPermissions();
   renderCashStatus();
@@ -4579,51 +5088,55 @@ function switchToPos(tabId = 'ventas') {
   posScreen?.classList.remove('hidden');
   tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === tabId));
   panels.forEach((p) => p.classList.toggle('active', p.id === tabId));
-  if (tabId === 'cierres') renderCashClosings();
+  if (tabId === 'historial' || tabId === 'eliminadas') {
+    Promise.resolve().then(() => pullFromCloud({ modules: ['history'], force: true, includeHistory: true, reason: `tab-${tabId}` })).catch(() => {});
+  }
+  if (tabId === 'cierres') {
+    renderCashClosings();
+  }
 }
 
 async function handleLogin() {
   const username = loginUserInput?.value?.trim() || '';
   const password = loginPassInput?.value?.trim() || '';
   if (!username || !password) return setMsg(loginMessage, 'Ingresa usuario y contraseña para continuar.', false);
-  setMsg(loginMessage, 'Validando credenciales...', true);
+  let cloudReadyAtLogin = false;
   try {
-    try { await pullFromCloudWithTimeout(1500); } catch {}
-    ensureUsers();
-    const user = state.users.find((u) => u.username === username && u.password === password);
-    if (!user) return setMsg(loginMessage, 'Usuario o contraseña incorrectos.', false);
-    if (user.enabled === false) return setMsg(loginMessage, 'Usuario inhabilitado por administrador.', false);
-    const now = Date.now();
-    user.lastActivityAt = now;
-    state.currentUser = { username: user.username, loginAt: now, lastActivityAt: now };
-    persistSession();
-    saveLocalState();
-    beginSessionWatcher();
-    if (loginUserInput) loginUserInput.value = '';
-    if (loginPassInput) loginPassInput.value = '';
-    setMsg(loginMessage, 'Ingreso correcto.');
-    markUserActivity('login');
-    persist();
-    cloudHydrated = true;
-    maybeForceLogoutFromClosure();
-    if (!state.currentUser) return;
-    renderOrdersVisibility();
-    renderHomeActions();
-    showHome();
-    renderSalesHistory();
-    if (!isGeneralCashOpen()) setMsg(homeMessage, 'La caja general está cerrada. Debes abrirla para operar.', false);
-    else if (!getActiveCashBox()) setMsg(homeMessage, 'La caja del día está cerrada. Espera a que un usuario autorizado la abra.', false);
-  } catch (err) {
-    console.error('[login] error', err);
-    setMsg(loginMessage, 'No se pudo iniciar sesión. Revisa configuración/local storage/sincronización.', false);
+    await pullFromCloud({ force: true, modules: ['config', 'operations'], reason: 'login' });
+    cloudReadyAtLogin = true;
+  } catch {}
+  ensureUsers();
+  const user = state.users.find((u) => u.username === username && u.password === password);
+  if (!user) return setMsg(loginMessage, 'Usuario o contraseña incorrectos.', false);
+  if (user.enabled === false) return setMsg(loginMessage, 'Usuario inhabilitado por administrador.', false);
+  const now = Date.now();
+  user.lastActivityAt = now;
+  state.currentUser = { username: user.username, loginAt: now, lastActivityAt: now };
+  saveLocalState();
+  beginSessionWatcher();
+  if (loginUserInput) loginUserInput.value = '';
+  if (loginPassInput) loginPassInput.value = '';
+  setMsg(loginMessage, '');
+  markUserActivity('login');
+  persist();
+  cloudHydrated = cloudHydrated || cloudReadyAtLogin;
+  if (!cloudHydrated) {
+    console.error('[login] Sesión iniciada sin hidratación cloud. Se bloquearán operaciones compartidas hasta reconexión.', saleDebugContext());
   }
+  startFirebaseRealtimeListener();
+  maybeForceLogoutFromClosure();
+  if (!state.currentUser) return;
+  renderOrdersVisibility();
+  renderHomeActions();
+  showHome();
+  renderSalesHistory();
+  if (!getActiveCashBox()) setMsg(homeMessage, 'La caja está cerrada. Espera a que un usuario autorizado la abra.', false);
 }
 
 function logout(message = '') {
   const u = currentUserRecord();
   if (u) u.lastLogoutAt = Date.now();
   state.currentUser = null;
-  persistSession();
   persist();
   showLogin();
   if (message) setMsg(loginMessage, message, false);
@@ -4640,89 +5153,6 @@ function closeStartCashModal() {
   document.getElementById('startCashModalOverlay')?.remove();
 }
 
-function closeGeneralCashModal() {
-  document.getElementById('generalCashModalOverlay')?.remove();
-}
-
-function openGeneralCashModal() {
-  if (!canManageGeneralCash()) return setMsg(homeMessage, 'No tienes permiso para abrir la caja general.', false);
-  if (isGeneralCashOpen()) return setMsg(homeMessage, 'La caja general ya está abierta.', false);
-  closeGeneralCashModal();
-  const overlay = document.createElement('div');
-  overlay.id = 'generalCashModalOverlay';
-  overlay.className = 'modal';
-  overlay.innerHTML = `<div class="modal-card"><h3>Abrir caja general</h3><div class="grid2"><label>Efectivo inicial<input id="generalCashOpeningInput" type="number" min="0" step="0.01" placeholder="0.00" /></label><label>QR / banco inicial<input id="generalCashOpeningQrInput" type="number" min="0" step="0.01" placeholder="0.00" /></label></div><div class="grid2"><button id="generalCashConfirmBtn" class="primary" type="button">Confirmar</button><button id="generalCashCancelBtn" class="secondary" type="button">Cancelar</button></div></div>`;
-  document.body.appendChild(overlay);
-  document.getElementById('generalCashCancelBtn')?.addEventListener('click', closeGeneralCashModal);
-  document.getElementById('generalCashConfirmBtn')?.addEventListener('click', () => {
-    const efectivo = Math.max(0, Number(document.getElementById('generalCashOpeningInput')?.value || 0));
-    const qr = Math.max(0, Number(document.getElementById('generalCashOpeningQrInput')?.value || 0));
-    startGeneralCashSession({ efectivo, qr });
-  });
-}
-
-function openCloseGeneralCashModal() {
-  if (!canManageGeneralCash()) return setMsg(homeMessage, 'No tienes permiso para cerrar la caja general.', false);
-  if (!isGeneralCashOpen()) return setMsg(homeMessage, 'La caja general ya está cerrada.', false);
-  if (getActiveCashBox()) return setMsg(homeMessage, 'Primero debes cerrar la caja del día.', false);
-  closeGeneralCashModal();
-  const overlay = document.createElement('div');
-  overlay.id = 'generalCashModalOverlay';
-  overlay.className = 'modal';
-  overlay.innerHTML = `<div class="modal-card"><h3>Cerrar caja general</h3><p>Confirma con tu contraseña.</p><label>Contraseña<input id="generalCashClosePassInput" type="password" placeholder="Contraseña" /></label><div class="grid2"><button id="generalCashCloseConfirmBtn" class="primary" type="button">Cerrar caja general</button><button id="generalCashCancelBtn" class="secondary" type="button">Cancelar</button></div></div>`;
-  document.body.appendChild(overlay);
-  document.getElementById('generalCashCancelBtn')?.addEventListener('click', closeGeneralCashModal);
-  document.getElementById('generalCashCloseConfirmBtn')?.addEventListener('click', () => closeGeneralCashSession(document.getElementById('generalCashClosePassInput')?.value || ''));
-}
-
-function startGeneralCashSession({ efectivo = 0, qr = 0 } = {}) {
-  if (!canManageGeneralCash()) return setMsg(homeMessage, 'No tienes permiso para abrir la caja general.', false);
-  if (isGeneralCashOpen()) return setMsg(homeMessage, 'La caja general ya está abierta.', false);
-  state.generalCash = {
-    efectivo: Math.max(0, Number(efectivo || 0)),
-    qr: Math.max(0, Number(qr || 0)),
-    estado: 'ABIERTA',
-    openedAt: new Date().toISOString(),
-    closedAt: '',
-    openedBy: state.currentUser?.username || '-',
-    closedBy: '',
-    updatedAt: Date.now()
-  };
-  closeGeneralCashModal();
-  persist();
-  Promise.resolve(syncToCloud()).catch((err) => console.error('[sync] open general cash failed', err));
-  refreshFinancialViews();
-  renderHomeActions();
-  setMsg(homeMessage, 'Caja general abierta correctamente.');
-}
-
-function closeGeneralCashSession(password = '') {
-  const user = currentUserRecord();
-  if (!user || user.password !== String(password || '')) return setMsg(homeMessage, 'Contraseña incorrecta para cerrar caja general.', false);
-  const closing = {
-    id: uid(),
-    fecha_inicio: state.generalCash?.openedAt || '',
-    fecha_fin: new Date().toISOString(),
-    efectivo: Number(state.generalCash?.efectivo || 0),
-    qr: Number(state.generalCash?.qr || 0),
-    total: Number(state.generalCash?.efectivo || 0) + Number(state.generalCash?.qr || 0),
-    usuario: state.currentUser?.username || '-'
-  };
-  state.generalClosings.unshift(closing);
-  state.generalCash = {
-    ...state.generalCash,
-    estado: 'CERRADA',
-    closedAt: closing.fecha_fin,
-    closedBy: state.currentUser?.username || '-',
-    updatedAt: Date.now()
-  };
-  closeGeneralCashModal();
-  persist();
-  refreshFinancialViews();
-  renderHomeActions();
-  setMsg(homeMessage, 'Caja general cerrada correctamente.');
-}
-
 function openStartCashModal() {
   console.info('[cash] click Abrir Caja');
   if (!canOpenCash()) {
@@ -4735,15 +5165,11 @@ function openStartCashModal() {
     setMsg(homeMessage, 'Ya existe una caja abierta.', false);
     return;
   }
-  if (!isGeneralCashOpen()) {
-    setMsg(homeMessage, 'Debes abrir la caja general antes de abrir la caja del día.', false);
-    return;
-  }
   closeStartCashModal();
   const overlay = document.createElement('div');
   overlay.id = 'startCashModalOverlay';
   overlay.className = 'modal';
-  overlay.innerHTML = `<div class="modal-card"><h3>Abrir caja del día</h3><p>Ingresa el monto inicial que saldrá desde la caja general.</p><div class="grid2"><label>Monto inicial<input id="startCashOpeningInput" type="number" min="0" step="0.01" placeholder="0.00" /></label></div><div class="grid2"><button id="startCashConfirmBtn" class="primary" type="button">Confirmar apertura</button><button id="startCashCancelBtn" class="secondary" type="button">Cancelar</button></div></div>`;
+  overlay.innerHTML = `<div class="modal-card"><h3>Abrir caja</h3><p>Ingresa el monto inicial de caja.</p><div class="grid2"><label>Monto inicial<input id="startCashOpeningInput" type="number" min="0" step="0.01" placeholder="0.00" /></label></div><div class="grid2"><button id="startCashConfirmBtn" class="primary" type="button">Confirmar apertura</button><button id="startCashCancelBtn" class="secondary" type="button">Cancelar</button></div></div>`;
   document.body.appendChild(overlay);
   document.getElementById('startCashCancelBtn')?.addEventListener('click', closeStartCashModal);
   document.getElementById('startCashConfirmBtn')?.addEventListener('click', () => {
@@ -4769,9 +5195,11 @@ async function startCashSession(openingAmount = 0) {
     console.error('[cash] monto inicial inválido', openingAmount);
     return setMsg(homeMessage, 'Monto inicial inválido.', false);
   }
-  if (!isGeneralCashOpen()) return setMsg(homeMessage, 'La caja general debe estar abierta.', false);
-  if (parsedOpening > Number(state.generalCash?.efectivo || 0)) return setMsg(homeMessage, 'La caja general no tiene suficiente efectivo para transferir a la caja del día.', false);
 
+  try { await pullCashStateFromCloud('open-cash-preflight'); } catch {}
+  if (getActiveCashBox()) {
+    return setMsg(homeMessage, 'Ya existe una caja abierta.', false);
+  }
   const nowIso = new Date().toISOString();
   const cashBox = {
     id: uid(),
@@ -4788,27 +5216,21 @@ async function startCashSession(openingAmount = 0) {
   state.activeCashBoxId = cashBox.id;
   state.systemStatus = 'CAJA_ABIERTA';
   state.cashSession = { id: cashBox.id, openedAt: cashBox.fecha_apertura, openingCash: parsedOpening, orderCounter: 1 };
-  state.generalCash.efectivo = Math.max(0, Number(state.generalCash?.efectivo || 0) - parsedOpening);
-  state.generalCash.updatedAt = Date.now();
-  state.outflows.unshift({
-    id: uid(),
-    tipo: 'transferencia',
-    caja: 'caja_dia',
-    de: 'caja_general',
-    a: 'caja_dia',
-    cashBoxId: cashBox.id,
-    createdAt: nowIso,
-    direction: 'entrada',
-    method: 'efectivo',
-    description: 'Transferencia interna de apertura a caja del día',
-    amount: parsedOpening,
-    user: state.currentUser?.username || '-'
-  });
+  state.generalCash = {
+    ...(state.generalCash || {}),
+    efectivo: parsedOpening,
+    qr: 0,
+    estado: 'ABIERTA',
+    openedAt: nowIso,
+    closedAt: '',
+    openedBy: state.currentUser?.username || '-',
+    closedBy: '',
+    updatedAt: bumpCashStateVersion('open-cash')
+  };
 
   closeStartCashModal();
   startCashCard?.classList.add('hidden');
-  persist();
-  Promise.resolve(syncToCloud()).catch((err) => console.error('[sync] open cash failed', err));
+  persist({ sync: false });
   renderHomeActions();
   renderTabsByPermissions();
   renderCashStatus();
@@ -4819,8 +5241,9 @@ async function startCashSession(openingAmount = 0) {
   renderDebtors();
   renderOutflows();
   console.info('[cash] caja abierta correctamente', { cashBoxId: cashBox.id });
-  setMsg(homeMessage, 'Caja del día abierta correctamente.');
+  setMsg(homeMessage, 'Caja abierta correctamente.');
   switchToPos('ventas');
+  Promise.resolve(syncCashStateToCloud('open-cash')).catch((err) => console.error('[cash] open sync failed', err));
 }
 
 async function closeCashSession() {
@@ -4831,13 +5254,16 @@ async function closeCashSession() {
   try {
     const activeCash = getActiveCashBox();
     if (!activeCash) return setMsg(homeMessage, 'No hay caja abierta para cerrar.', false);
+    try { await pullCashStateFromCloud('close-cash-preflight'); } catch {}
+    const refreshedActiveCash = getActiveCashBox();
+    if (!refreshedActiveCash) return setMsg(homeMessage, 'No hay caja abierta para cerrar.', false);
     if (!confirm('¿Estás seguro que deseas cerrar caja?')) return;
 
-    const daySales = salesForActiveCashBox().filter((sale) => !sale.carryOverDebt);
-    const dayOutflows = (state.outflows || []).filter((move) => move.cashBoxId === state.activeCashBoxId);
-    const metrics = activeDailyCashMetrics(state.activeCashBoxId);
-    const dayDebtPayments = activeDebtPayments().filter((pay) => pay.cashBoxId === state.activeCashBoxId);
-    const dayDeletedSales = (state.deletedSales || []).filter((sale) => sale.cashBoxId === state.activeCashBoxId);
+    const currentCashBoxId = refreshedActiveCash.id;
+    const daySales = (state.sales || []).filter((sale) => sale.cashBoxId === currentCashBoxId && isCountableActiveSale(sale));
+    const dayOutflows = (state.outflows || []).filter((move) => move.cashBoxId === currentCashBoxId);
+    const dayDebtPayments = activeDebtPayments().filter((pay) => pay.cashBoxId === currentCashBoxId);
+    const dayDeletedSales = (state.deletedSales || []).filter((sale) => sale.cashBoxId === currentCashBoxId);
 
     const totalsByMethod = daySales.reduce((acc, sale) => {
       const method = sale.payment || 'desconocido';
@@ -4845,74 +5271,39 @@ async function closeCashSession() {
       return acc;
     }, {});
 
+    const debtCashIn = dayDebtPayments.reduce((sum, pay) => sum + Number(pay.cashAmount || (pay.method === 'efectivo' ? pay.amount : 0) || 0), 0);
+    const debtQrIn = dayDebtPayments.reduce((sum, pay) => sum + Number(pay.qrAmount || (pay.method === 'qr' ? pay.amount : 0) || 0), 0);
     const cashIn = daySales.reduce((sum, sale) => sum + Number(sale.breakdown?.cash || 0), 0);
     const qrIn = daySales.reduce((sum, sale) => sum + Number(sale.breakdown?.qr || 0), 0);
     const debtPendingTotal = daySales.reduce((sum, sale) => sum + Number(sale.debtAmount || 0), 0);
 
-    const transferMoves = [];
-    if (metrics.netCash > 0) {
-      state.generalCash.efectivo = Number(state.generalCash?.efectivo || 0) + Number(metrics.netCash || 0);
-      state.generalCash.updatedAt = Date.now();
-      transferMoves.push({
-        id: uid(),
-        tipo: 'transferencia',
-        caja: 'caja_dia',
-        de: 'caja_dia',
-        a: 'caja_general',
-        cashBoxId: state.activeCashBoxId,
-        createdAt: new Date().toISOString(),
-        direction: 'salida',
-        method: 'efectivo',
-        description: 'Transferencia de cierre hacia caja general',
-        amount: Number(metrics.netCash || 0),
-        user: state.currentUser?.username || '-'
-      });
-    }
-    if (metrics.netQr > 0) {
-      state.generalCash.qr = Number(state.generalCash?.qr || 0) + Number(metrics.netQr || 0);
-      state.generalCash.updatedAt = Date.now();
-      transferMoves.push({
-        id: uid(),
-        tipo: 'transferencia',
-        caja: 'caja_dia',
-        de: 'caja_dia',
-        a: 'caja_general',
-        cashBoxId: state.activeCashBoxId,
-        createdAt: new Date().toISOString(),
-        direction: 'salida',
-        method: 'qr',
-        description: 'Transferencia QR de cierre hacia caja general',
-        amount: Number(metrics.netQr || 0),
-        user: state.currentUser?.username || '-'
-      });
-    }
-    if (transferMoves.length) state.outflows.unshift(...transferMoves.reverse());
-
-    activeCash.estado = 'CERRADA';
-    activeCash.fecha_cierre = new Date().toISOString();
-    activeCash.resumen = {
+    refreshedActiveCash.estado = 'CERRADA';
+    refreshedActiveCash.fecha_cierre = new Date().toISOString();
+    refreshedActiveCash.resumen = {
       total_ventas: daySales.reduce((sum, sale) => sum + Number(sale.total || 0), 0),
       total_transacciones: daySales.length,
       total_pedidos: daySales.length,
       total_por_metodo: totalsByMethod
     };
-    activeCash.usuario_cierre = state.currentUser?.username || '-';
+    refreshedActiveCash.usuario_cierre = state.currentUser?.username || '-';
 
     const closing = {
       id: uid(),
-      cashBoxId: activeCash.id,
-      openedAt: activeCash.fecha_apertura,
-      closedAt: activeCash.fecha_cierre,
-      openingCash: Number(activeCash.openingCash || 0),
+      cashBoxId: refreshedActiveCash.id,
+      openedAt: refreshedActiveCash.fecha_apertura,
+      closedAt: refreshedActiveCash.fecha_cierre,
+      openingCash: Number(refreshedActiveCash.openingCash || 0),
       cashIn,
       qrIn,
+      debtCashIn,
+      debtQrIn,
       debtPending: debtPendingTotal,
-      finalCashInBox: Number(activeCash.openingCash || 0) + cashIn,
+      finalCashInBox: Number(refreshedActiveCash.openingCash || 0) + cashIn + debtCashIn,
       salesCount: daySales.length,
       salesIds: daySales.map((sale) => sale.id),
       salesSnapshot: daySales.map((sale) => ({ ...sale })),
       deletedSalesSnapshot: dayDeletedSales.map((sale) => ({ ...sale })),
-      outflowsSnapshot: [...dayOutflows.map((move) => ({ ...move })), ...transferMoves.map((move) => ({ ...move }))],
+      outflowsSnapshot: dayOutflows.map((move) => ({ ...move })),
       debtPaymentsSnapshot: dayDebtPayments.map((pay) => ({ ...pay }))
     };
     state.cashClosings.unshift(closing);
@@ -4921,7 +5312,14 @@ async function closeCashSession() {
     state.systemStatus = 'CAJA_CERRADA';
     state.cashSession = null;
     state.forceLogoutAt = Date.now();
-    persist();
+    state.generalCash = {
+      ...(state.generalCash || {}),
+      estado: 'CERRADA',
+      closedAt: refreshedActiveCash.fecha_cierre,
+      closedBy: state.currentUser?.username || '-',
+      updatedAt: bumpCashStateVersion('close-cash')
+    };
+    persist({ sync: false });
 
     renderHomeActions();
     renderTabsByPermissions();
@@ -4929,26 +5327,38 @@ async function closeCashSession() {
     refreshFinancialViews();
     if (cashCloseResult) {
       cashCloseResult.className = 'ok';
-      cashCloseResult.textContent = `Cierre digital realizado: Ventas ${money(activeCash.resumen.total_ventas)} · Transacciones ${activeCash.resumen.total_transacciones}.`;
+      cashCloseResult.textContent = `Cierre digital realizado: Ventas ${money(refreshedActiveCash.resumen.total_ventas)} · Transacciones ${refreshedActiveCash.resumen.total_transacciones}.`;
     }
     switchToPos('ventas');
     showHome();
-    Promise.resolve(syncToCloud()).catch((err) => console.error('[cash] sync close failed', err));
-    setMsg(homeMessage, 'La caja del día ha sido cerrada.', false);
+    setMsg(homeMessage, 'La caja ha sido cerrada.', false);
+    Promise.resolve(syncCashStateToCloud('close-cash')).catch((err) => console.error('[cash] close sync failed', err));
+    Promise.resolve(saveCashClosingToCloud(closing)).catch((err) => console.error('[cash][closing] save failed', err));
   } catch (err) {
     console.error('[cash] closeCashSession error', err);
-    setMsg(homeMessage, 'No se pudo cerrar caja. Intenta nuevamente.', false);
+    setMsg(homeMessage, 'No se pudo cerrar caja.', false);
   }
 }
 
 async function registerSale() {
+  await ensureCloudSeedData();
   if (isSubmittingSale) return;
   isSubmittingSale = true;
   if (createSaleBtn) createSaleBtn.disabled = true;
   touchSessionActivity();
   try {
-  if (!state.currentUser) return setMsg(saleMessage, 'Inicia sesión para registrar ventas.', false);
-  if (!getActiveCashBox()) return setMsg(saleMessage, 'Debes abrir caja para vender.', false);
+  console.info('[sale][init-check]', { cloudHydrated, bootCloudReady, bootListenerReady, bootCashReady, activeCashBoxId: state.activeCashBoxId || '' });
+  if ((state.sales || []).length < 2) console.info('[sale][first-run]', { salesCount: (state.sales || []).length });
+  if (!cloudHydrated || !bootCloudReady) {
+    await pullFromCloud({ force: true });
+    bootCloudReady = true;
+    cloudHydrated = true;
+  }
+  if (!bootListenerReady) startFirebaseRealtimeListener();
+  if (!state.currentUser) return setMsg(saleMessage, 'fallo porque currentUser es inválido', false);
+  if (!cloudHydrated) return setMsg(saleMessage, 'fallo porque el cliente no está hidratado desde cloud', false);
+  const activeCash = getActiveCashBox();
+  if (!activeCash) return setMsg(saleMessage, 'fallo porque no existe caja activa compartida', false);
   if (!state.currentCart.length) return setMsg(saleMessage, 'Añade productos antes de generar la venta.', false);
   const totals = saleTotals();
   const payment = paymentType?.value || 'efectivo';
@@ -5000,34 +5410,68 @@ async function registerSale() {
   }
   const deliveryItems = [];
   state.currentCart.forEach((item) => { for (let i = 0; i < item.qty; i += 1) deliveryItems.push({ name: formatProductWithComboText(item), delivered: false, deliveredBy: '' }); });
-  const activeCashBoxId = state.activeCashBoxId;
-  const orderNumber = await reserveNextOrderNumber(activeCashBoxId);
-  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber, createdAt: new Date().toISOString(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
+  const activeCashBoxId = activeCash.id;
+  let orderNumber = 0;
+  try {
+    orderNumber = await reserveNextOrderNumber(activeCashBoxId);
+    console.info('[sale][order-number]', { orderNumber, activeCashBoxId });
+  } catch (err) {
+    console.error('[sale] fallo al reservar correlativo', { message: err?.message, code: err?.code, status: err?.status, context: saleDebugContext({ activeCashBoxId }) });
+    return setMsg(saleMessage, 'fallo al reservar correlativo', false);
+  }
+  const sale = { id: uid(), cashBoxId: activeCashBoxId, orderNumber, createdAt: new Date().toISOString(), modifiedAt: Date.now(), user: state.currentUser.username, items: state.currentCart.map((i) => ({ ...i })), total: totals.final, payment, breakdown, debtAmount, debtorId, paymentStatus: debtAmount > 0 ? 'pendiente' : 'realizado', orderStatus: 'pendiente', deliveryItems, carryOverDebt: false };
+  console.info('[sale][create] Venta generada', saleDebugContext({ saleId: sale.id, sale, orderCounters: state.orderCounters }));
   sale.invoiceSnapshot = buildInvoiceData(sale);
-  const stockMoves = [];
   if (isStockEnabled()) {
     for (const item of state.currentCart) {
-      stockMoves.push({ id: item.id, qty: Number(item.qty || 0) });
       const p = state.products.find((x) => x.id === item.id);
-      if (Array.isArray(p?.combo) && p.combo.length) {
+      if (!p) continue;
+      const next = Number(p.stockCurrent || 0) - Number(item.qty || 0);
+      p.stockCurrent = next;
+      console.info('[sale][stock]', { saleId: sale.id, productId: p.id, stockCurrent: next });
+      if (next <= Number(appConfig.stockMinimo || 0)) console.warn('[stock] Producto con stock mínimo', p.name, next);
+      if (Array.isArray(p.combo) && p.combo.length) {
         const req = comboComponentRequirements(p, item.qty);
-        req.forEach((neededQty, componentId) => stockMoves.push({ id: componentId, qty: Number(neededQty || 0) }));
+        req.forEach((neededQty, componentId) => {
+          const component = state.products.find((x) => x.id === componentId);
+          if (!component) return;
+          const cNext = Number(component.stockCurrent || 0) - Number(neededQty || 0);
+          component.stockCurrent = cNext;
+          if (cNext <= Number(appConfig.stockMinimo || 0)) console.warn('[stock] Producto con stock mínimo', component.name, cNext);
+        });
       }
     }
   }
+  applyWarehouseImpactFromSaleItems(sale.items, { reverse: false, saleId: `#${orderNumberLabel(sale.orderNumber)}` });
+  state.sales.unshift(sale);
+  state.currentCart = [];
+  persist({ sync: false, module: 'sale' });
   let confirmed = false;
   try {
-    await commitSaleToFirebaseTransaction(sale, stockMoves);
+    console.info('[sale][before-commit]', { saleId: sale.id, orderNumber: sale.orderNumber, cashBoxId: sale.cashBoxId, activeCashBoxId: state.activeCashBoxId || '', user: sale.user, payment: sale.payment, total: sale.total, inStateSales: state.sales.some((x) => x.id === sale.id) });
+    await commitSaleToFirebaseTransaction(sale);
+    await pullFromCloud({ force: true, modules: ['operations', 'catalog'] });
+    const inState = (state.sales || []).some((x) => x.id === sale.id);
+    const inHistory = salesForActiveCashBox().some((x) => x.id === sale.id);
+    const totals = saleTotals();
+    console.info('[sale][success-gate]', { saleId: sale.id, inState, inHistory, totalAfterPull: totals.final, activeCashBoxId: state.activeCashBoxId || '' });
+    if (!inState || !inHistory) throw new Error('sale success-gate failed');
     confirmed = true;
-    state.currentCart = [];
+    Promise.resolve().then(() => syncToCloud({ modules: ['operations', 'catalog'] })).catch((err) => console.warn('[sale][sync] post-confirm sync warning', err));
   } catch (err) {
-    const detail = describeCloudSyncError(err);
-    console.error('[sale] confirm transaction failed', detail, err);
-    if (syncStatus) syncStatus.textContent = `Venta no confirmada: ${detail}`;
+    if (String(err?.code || '').startsWith('RTDB_HTTP_')) console.error('[sale][sync][rtdb] fallo al confirmar venta en RTDB', { error: err, context: saleDebugContext({ saleId: sale.id }) });
+    else console.error('[sale][sync] fallo al confirmar venta en RTDB', { error: err, context: saleDebugContext({ saleId: sale.id }) });
   }
   if (!confirmed) {
-    return setMsg(saleMessage, `No se pudo confirmar la venta en Firebase. ${syncStatus?.textContent || 'Intenta nuevamente.'}`, false);
+    console.error('[sale][rollback]', { saleId: sale.id, orderNumber: sale.orderNumber });
+    state.sales = state.sales.filter((x) => x.id !== sale.id);
+    persist({ sync: false, module: 'sale' });
+    return setMsg(saleMessage, 'No se pudo confirmar la venta en la nube. Intenta nuevamente.', false);
   }
+  setTimeout(() => {
+    const exists = (state.sales || []).some((x) => x.id === sale.id);
+    if (!exists) console.error('[sale][lost-detection]', { saleId: sale.id, orderNumber: sale.orderNumber, activeCashBoxId: state.activeCashBoxId || '' });
+  }, 1200);
   renderCart();
   renderOrders(false);
   setMsg(saleMessage, 'Venta registrada correctamente.');
@@ -5039,7 +5483,6 @@ async function registerSale() {
     });
   }
   renderWarehouse();
-  Promise.resolve(syncToCloud()).catch((err) => console.error('[sync] sale sync failed', err));
   if (saleSuccessTitle) saleSuccessTitle.textContent = `Venta realizada exitosamente · Pedido #${orderNumberLabel(sale.orderNumber)}`;
   saleProceedReady = false;
   saleSuccessModal?.classList.remove('hidden');
@@ -5167,13 +5610,15 @@ function showStockPage() {
 function showWarehousePage() {
   if (!hasPermission('viewWarehouseButton')) {
     showHome();
-    setMsg(homeMessage, 'No tienes permiso para acceder al módulo de componentes.', false);
+    setMsg(homeMessage, 'No tienes permiso para acceder al módulo Almacén.', false);
     return;
   }
   homeScreen?.classList.add('hidden');
   posScreen?.classList.add('hidden');
   loginScreen?.classList.add('hidden');
   stockScreen?.classList.add('hidden');
+  warehouseScreen?.classList.remove('hidden');
+  if (warehouseStatus) warehouseStatus.textContent = 'Gestión de componentes y recetas.';
   renderWarehouse();
 }
 
@@ -5203,7 +5648,7 @@ function permissionSchema() {
     { key: 'viewSummaryTab', label: 'Puede ver botón Total ventas diarias' },
     { key: 'viewOrders', label: 'Puede ver botón Pedidos' },
     { key: 'viewClosingsTab', label: 'Puede ver botón Cierre de caja' },
-    { key: 'viewWarehouseButton', label: 'Puede ver botón componentes' },
+    { key: 'viewWarehouseButton', label: 'Puede ver botón Almacén' },
     { key: 'viewSalesModeButton', label: 'Puede ver el botón Modo de ventas' },
     { key: 'deleteSales', label: 'Puede eliminar ventas' },
     { key: 'openCash', label: 'Puede abrir caja' },
@@ -5213,8 +5658,7 @@ function permissionSchema() {
     { key: 'accessSettings', label: 'Puede acceder a configuración' },
     { key: 'deleteClosings', label: 'Puede eliminar cierres de caja' },
     { key: 'deleteCashMovements', label: 'Puede eliminar mov. de caja' },
-    { key: 'clearDeletedSalesHistory', label: 'Puede vaciar ventas eliminadas' },
-    { key: 'abrir_cerrar_caja_general', label: 'Puede abrir/cerrar caja general' }
+    { key: 'clearDeletedSalesHistory', label: 'Puede vaciar ventas eliminadas' }
   ];
 }
 
@@ -5273,9 +5717,10 @@ function normalizeRoute(routeLike) {
 function parentRoute(route) {
   if (route === 'home') return 'home';
   if (route === 'settings') return 'home';
-  if (route in { 'settings/main':1, 'settings/sales':1, 'settings/billing':1, 'settings/users':1, 'settings/users/activity':1, 'stock':1, 'pos/ventas':1, 'pos/pedidos':1, 'pos/configVentas':1, 'pos/deudas':1, 'pos/resumen':1, 'cash/closings':1, 'sales-mode':1 }) return route.startsWith('settings/') ? 'settings' : 'home';
+  if (route in { 'settings/main':1, 'settings/sales':1, 'settings/billing':1, 'settings/users':1, 'settings/users/activity':1, 'stock':1, 'warehouse':1, 'warehouse/gestion':1, 'warehouse/movimientos':1, 'warehouse/movimientos/archivados':1, 'pos/ventas':1, 'pos/pedidos':1, 'pos/configVentas':1, 'pos/deudas':1, 'pos/resumen':1, 'cash/closings':1, 'sales-mode':1 }) return route.startsWith('settings/') ? 'settings' : 'home';
   if (route.startsWith('settings/users/edit/') || route === 'settings/users/new') return 'settings/users';
   if (route === 'settings/users/activity') return 'settings/users';
+  if (route.startsWith('warehouse/movimientos/archivados/')) return 'warehouse/movimientos/archivados';
   if (route === 'pos/productos') return 'settings';
   if (route in { 'pos/productos-lista':1, 'pos/productos-categorias':1, 'pos/productos-combo':1 }) return 'pos/productos';
   if (route in { 'pos/historial':1, 'pos/eliminadas':1, 'pos/salidas':1 }) return 'pos/configVentas';
@@ -5296,9 +5741,11 @@ function ensureGlobalNavButtons() {
   backBtn.onclick = () => {
     const current = normalizeRoute(window.location.hash || '#home');
     if (current === 'home') return;
+    console.info('[nav][go-back]', { current, target: parentRoute(current) });
     navigateTo(parentRoute(current), { replace: true });
   };
   homeBtn.onclick = () => {
+    console.info('[nav][go-home]');
     navStack = ['home'];
     navigateTo('home', { replace: true });
   };
@@ -5319,16 +5766,18 @@ function hideAllScreens() {
   homeScreen?.classList.add('hidden');
   posScreen?.classList.add('hidden');
   stockScreen?.classList.add('hidden');
+  warehouseScreen?.classList.add('hidden');
   homeScreen?.classList.remove('settings-mode');
 }
 
 function enforceSingleActiveView(route = normalizeRoute(window.location.hash || '#home')) {
-  const activeScreens = [loginScreen, homeScreen, posScreen, stockScreen].filter((el) => el && !el.classList.contains('hidden'));
+  const activeScreens = [loginScreen, homeScreen, posScreen, stockScreen, warehouseScreen].filter((el) => el && !el.classList.contains('hidden'));
   if (activeScreens.length > 1) {
     console.warn('[nav] múltiples vistas activas detectadas, corrigiendo', activeScreens.map((el) => el.id));
     hideAllScreens();
     if (route === 'home') homeScreen?.classList.remove('hidden');
     else if (route === 'stock') stockScreen?.classList.remove('hidden');
+    else if (route === 'warehouse' || route.startsWith('warehouse/')) warehouseScreen?.classList.remove('hidden');
     else if (route.startsWith('pos/') || route === 'cash/closings') posScreen?.classList.remove('hidden');
     else if (route.startsWith('settings')) {
       homeScreen?.classList.remove('hidden');
@@ -5345,10 +5794,13 @@ function ensureSettingsNavButtons() {
 }
 
 function renderRoute(route) {
+  console.info('[nav][route-change]', { route });
   if (!state.currentUser) return showLogin();
   if (route === 'home') { showHome(); enforceSingleActiveView(route); return; }
   if (route === 'stock') { showStockPage(); enforceSingleActiveView(route); return; }
+  if (route === 'warehouse' || route === 'warehouse/gestion' || route === 'warehouse/movimientos' || route === 'warehouse/movimientos/archivados' || route.startsWith('warehouse/movimientos/archivados/')) { showWarehousePage(); enforceSingleActiveView(route); return; }
   if (route === 'settings') {
+    console.info('[nav][render-settings]');
     hideAllScreens();
     homeScreen?.classList.remove('hidden');
     homeScreen?.classList.add('settings-mode');
@@ -5393,6 +5845,7 @@ function renderRoute(route) {
 
 function applyRoute() {
   const route = normalizeRoute(window.location.hash);
+  console.info('[nav][route-change]', { route, source: 'applyRoute' });
   if (!state.currentUser) return showLogin();
   ensureGlobalNavButtons();
   if (!applyingRoute) {
@@ -5405,6 +5858,7 @@ function applyRoute() {
 
 function navigateTo(route, opts = {}) {
   const next = normalizeRoute(route);
+  console.info('[nav][route-change]', { route: next, source: 'navigateTo', replace: Boolean(opts.replace) });
   if (state.currentUser && next !== 'home' && !validateSessionPolicy({ silent: false })) return;
   ensureGlobalNavButtons();
   const current = navStack[navStack.length - 1] || 'home';
@@ -5430,17 +5884,13 @@ function showSettingsMenu() {
   settingsMenuCard?.classList.remove('hidden');
 }
 
-async function saveGlobalSettingsToFirebase() {
-  const ref = getFirebaseRealtimeRef('settings');
-  await ref.set(state.settings || {});
-}
-
 async function flushConfigChanges(successMsg) {
-  persist();
+  console.info('[settings][persist] flushConfigChanges', { successMsg });
+  persist({ module: 'settings' });
   applySettings();
   renderOrdersVisibility();
   try {
-    await saveGlobalSettingsToFirebase();
+    console.info('[settings][sync] sincronizando settings a cloud');
     await syncToCloud();
   } catch (err) {
     console.warn('[config] sync warning', err);
@@ -5450,6 +5900,7 @@ async function flushConfigChanges(successMsg) {
 
 async function saveMainSettings() {
   if (!hasPermission('accessSettings')) return setMsg(homeMessage, 'No tienes permiso para configurar pantalla principal.', false);
+  console.info('[settings][save] Guardando configuración principal (inicio)');
   state.settings.title1 = title1Input?.value?.trim() || 'Mi Cafetería';
   state.settings.title2 = title2Input?.value?.trim() || 'Pantalla principal';
   state.settings.posTitle = posTitleInput?.value?.trim() || 'POS Cafetería';
@@ -5465,14 +5916,18 @@ async function saveMainSettings() {
   state.settings.accentColor = accentColorInput?.value || '#1f7a5c';
   state.settings.bgColor = bgColorInput?.value || '#f7f7fb';
   state.settings.cardColor = cardColorInput?.value || '#ffffff';
+  console.info('[settings][save] state.settings actualizado', { title1: state.settings.title1, title2: state.settings.title2, hasLogo: Boolean(state.settings.logoDataUrl) });
   syncAppConfig();
-  try { await saveGlobalSettingsToFirebase(); } catch (err) { console.error('[settings] save firebase failed', err); }
   const file = logoInput?.files?.[0];
-  if (!file) return flushConfigChanges('Configuración guardada.');
+  if (!file) {
+    console.info('[settings][logo-save]', { action: 'no-new-file', hasLogo: Boolean(state.settings.logoDataUrl) });
+    return flushConfigChanges('Configuración guardada.');
+  }
+  console.info('[settings][logo-load]', { fileName: file.name, size: file.size });
   const reader = new FileReader();
   reader.onload = async () => {
     state.settings.logoDataUrl = String(reader.result || '');
-    try { await saveGlobalSettingsToFirebase(); } catch (err) { console.error('[settings] logo save firebase failed', err); }
+    console.info('[settings][logo-save]', { action: 'loaded', length: state.settings.logoDataUrl.length });
     await flushConfigChanges('Configuración guardada.');
     if (logoInput) logoInput.value = '';
   };
@@ -5493,6 +5948,7 @@ async function saveSalesConfigSettings() {
 
 async function saveBillingSettings() {
   if (!hasPermission('accessSettings')) return setMsg(homeMessage, 'No tienes permiso para facturación.', false);
+  console.info('[billing][save]', { hasCurrentLogo: Boolean(state.settings?.billing?.logoDataUrl) });
   const billing = normalizeBillingSettings();
   billing.enabled = Boolean(billingEnabledInput?.checked);
   billing.title = String(billingTitleInput?.value || billing.title || 'CAFETERIA SH82').trim() || 'CAFETERIA SH82';
@@ -5515,9 +5971,16 @@ async function saveBillingSettings() {
   billing.autoPrintEnabled = Boolean(billingAutoPrintInput?.checked);
   const applyPersist = async () => {
     state.settings.billing = { ...billing };
-    persist();
-    try { await syncToCloud(); } catch (err) { console.error('[billing] sync save failed', err); }
+    console.info('[billing][persist]', { hasLogo: Boolean(state.settings.billing.logoDataUrl) });
+    persist({ module: 'settings' });
+    try {
+      await syncToCloud();
+      console.info('[billing][sync]', { hasLogo: Boolean(state.settings.billing.logoDataUrl) });
+      await pullFromCloud({ force: true });
+      console.info('[billing][pull]', { hasLogo: Boolean(state.settings?.billing?.logoDataUrl) });
+    } catch (err) { console.error('[billing] sync save failed', err); }
     applySettings();
+    console.info('[billing][logo-render]', { hasLogo: Boolean(state.settings?.billing?.logoDataUrl) });
     if (billingConfigStatus) billingConfigStatus.textContent = 'Configuración de facturación guardada y sincronizada.';
   };
   const file = billingLogoInput?.files?.[0];
@@ -5528,6 +5991,7 @@ async function saveBillingSettings() {
   const reader = new FileReader();
   reader.onload = async () => {
     billing.logoDataUrl = String(reader.result || '');
+    console.info('[billing][logo-save]', { length: billing.logoDataUrl.length });
     if (billingLogoInput) billingLogoInput.value = '';
     await applyPersist();
   };
@@ -5576,7 +6040,7 @@ function openComboCreatorModal() {
   const prodSel = document.getElementById('modalComboProd');
   const table = document.getElementById('modalComboTable');
   const totalEl = document.getElementById('modalComboTotal');
-  const cats = [...new Set(state.products.filter((p) => !p.hidden).map((p) => p.category))];
+  const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   if (catSel) catSel.innerHTML = cats.map((c) => `<option value="${c}">${c}</option>`).join('');
   const syncProd = () => {
     const cat = catSel?.value || cats[0] || '';
@@ -5621,12 +6085,10 @@ function openComboCreatorModal() {
     if (!name || price <= 0 || !state.comboBuilderItems.length) { alert('Completa nombre, precio y productos del combo.'); return; }
     if (!state.categories.includes('Combos')) state.categories.push('Combos');
     const ids = state.comboBuilderItems.flatMap((x) => Array.from({ length: x.qty }).map(() => x.id));
-    state.products.push({ id: uid(), category: 'Combos', subcategoryId: null, name, price, hidden: false, combo: ids });
+    state.products.push({ id: uid(), category: 'Combos', name, price, hidden: false, combo: ids });
     state.comboBuilderItems = [];
     persist();
     renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
     renderSaleSelectors();
     overlay.remove();
   });
@@ -5640,109 +6102,26 @@ function openProductEditModal(productId) {
   const overlay = document.createElement('div');
   overlay.id = 'editProductOverlay';
   overlay.className = 'modal';
-  overlay.innerHTML = `<div class="modal-card"><h3>Editar producto</h3><div class="grid4"><label>Categoría<select id="editProdCategory">${(state.categories || []).map((c) => `<option value="${c}">${c}</option>`).join('')}</select></label><label>Subcategoría<select id="editProdSubCategory"><option value="">Sin asignar</option></select></label><label>Producto<input id="editProdName" type="text" value="${p.name}" /></label><label>Precio<input id="editProdPrice" type="number" min="0.01" step="0.01" value="${Number(p.price || 0).toFixed(2)}" /></label></div><div class="grid2"><button id="saveEditProdBtn" class="primary" type="button">Guardar</button><button id="cancelEditProdBtn" class="secondary" type="button">Cancelar</button></div></div>`;
+  overlay.innerHTML = `<div class="modal-card"><h3>Editar producto</h3><div class="grid3"><label>Categoría<select id="editProdCategory">${(state.categories || []).map((c) => `<option value="${c}">${c}</option>`).join('')}</select></label><label>Producto<input id="editProdName" type="text" value="${p.name}" /></label><label>Precio<input id="editProdPrice" type="number" min="0.01" step="0.01" value="${Number(p.price || 0).toFixed(2)}" /></label></div><div class="grid2"><button id="saveEditProdBtn" class="primary" type="button">Guardar</button><button id="cancelEditProdBtn" class="secondary" type="button">Cancelar</button></div></div>`;
   document.body.appendChild(overlay);
   const cat = document.getElementById('editProdCategory');
-  const sub = document.getElementById('editProdSubCategory');
-  const syncSubs = () => {
-    const list = getSubCategoriesForCategory(cat?.value || '');
-    if (sub) sub.innerHTML = `<option value="">Sin asignar</option>${list.map((item) => `<option value="${item.id}">${item.name || 'Sin nombre'}</option>`).join('')}`;
-  };
   if (cat) cat.value = p.category || 'Todos';
-  syncSubs();
-  if (sub) sub.value = getSubCategoriesForCategory(cat?.value || '').some((item) => String(item.id) === String(p.subcategoryId || '')) ? String(p.subcategoryId || '') : '';
-  cat?.addEventListener('change', () => {
-    syncSubs();
-    if (sub) sub.value = '';
-  });
   document.getElementById('cancelEditProdBtn')?.addEventListener('click', () => overlay.remove());
   document.getElementById('saveEditProdBtn')?.addEventListener('click', () => {
     const name = document.getElementById('editProdName')?.value?.trim() || '';
     const category = document.getElementById('editProdCategory')?.value || 'Todos';
     const price = Number(document.getElementById('editProdPrice')?.value || 0);
-    const subcategoryId = document.getElementById('editProdSubCategory')?.value || null;
     if (!name || price <= 0) return;
     p.name = name;
     p.category = category;
-    p.subcategoryId = subcategoryId;
     p.price = price;
     if (!state.categories.includes(category)) state.categories.push(category);
     persist();
     renderProducts();
-    renderSubCategoryParents();
-    renderSubCategoriesTable();
     renderSaleSelectors();
     overlay.remove();
   });
 }
-
-
-function renderSubCategoryParents() {
-  if (!subCategoryParentSelect) return;
-  const cats = Array.isArray(state.categories) ? state.categories : [];
-  subCategoryParentSelect.innerHTML = cats.map((c) => `<option value="${c}">${c}</option>`).join('');
-}
-
-function subCategoryKey(cat, id) {
-  return `${String(cat || '')}::${String(id || '')}`;
-}
-
-function findSubCategory(cat, id) {
-  const list = Array.isArray(state.subcategories?.[cat]) ? state.subcategories[cat] : [];
-  return list.find((x) => String(x.id) === String(id)) || null;
-}
-
-function openImageUploadForSubCategory(cat, id) {
-  const sub = findSubCategory(cat, id);
-  if (!sub) return;
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = 'image/*';
-  input.addEventListener('change', () => {
-    const f = input.files?.[0];
-    if (input) input.value = '';
-    const key = subCategoryKey(cat, id);
-    beginImageUpload('subcategory', key, f, async (payload) => {
-      const previous = sub.image || '';
-      try {
-        sub.image = await saveImageFileToStorage(payload.file, previous, {
-          kind: 'category',
-          key,
-          onProgress: (pct) => setImageUploadStatus('subcategory', key, { uploading: true, progress: Math.max(2, Math.min(100, pct)), error: '' })
-        });
-      } catch (err) {
-        sub.image = previous;
-        setImageUploadStatus('subcategory', key, { uploading: false, progress: 0, error: String(err?.message || 'No se pudo subir la imagen.') });
-        setTimeout(() => setImageUploadStatus('subcategory', key, null), 4000);
-        return;
-      }
-      persistImageChange(() => { sub.image = previous; });
-      renderSubCategoriesTable();
-      renderSaleSelectors();
-      renderTouchSaleUi();
-    });
-  });
-  input.click();
-}
-
-function renderSubCategoriesTable() {
-  if (!subCategoriesTable) return;
-  const rows = [];
-  Object.entries(state.subcategories || {}).forEach(([cat, list]) => {
-    (Array.isArray(list) ? list : []).forEach((sub) => {
-      const key = subCategoryKey(cat, sub.id);
-      const st = getImageUploadStatus('subcategory', key);
-      const uploadBtnText = st?.uploading ? 'Subiendo...' : 'Subir imagen';
-      const imgSrc = resolveImageSource(sub.image || '');
-      const imageBlock = imgSrc ? `<div class="image-cell"><img class="image-thumb" src="${imgSrc}" alt="${sub.name || ''}" loading="lazy" /></div>` : '<span class="muted">Sin imagen</span>';
-      const err = st?.error ? `<div class="upload-error">${st.error}</div>` : '';
-      const retry = renderImageRetryHint('subcategory', key, sub.image || '');
-      rows.push(`<tr><td>${cat}</td><td>${sub.name || ''}</td><td><button class="secondary" data-sub-img-up="${key}" type="button" ${st?.uploading ? 'disabled' : ''}>${uploadBtnText}</button> <button class="secondary" data-sub-img-del="${key}" type="button">Eliminar imagen</button> <button class="secondary" data-sub-edit="${key}" type="button">Editar nombre</button> <button class="danger" data-sub-del="${key}" type="button">Eliminar subcategoría</button></td><td>${imageBlock}${renderImageUploadProgress('subcategory', key)}${err}${retry}</td></tr>`);
-    });
-  });
-  subCategoriesTable.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4">Sin subcategorías.</td></tr>';
-}
-
 
 function wireEvents() {
   if (createComboBtn) createComboBtn.classList.add('hidden');
@@ -5756,14 +6135,10 @@ function wireEvents() {
   loginPassInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
   logoutBtn?.addEventListener('click', logout);
   posLogoutBtn?.addEventListener('click', logout);
-  document.getElementById('openGeneralCashBtn')?.addEventListener('click', openGeneralCashModal);
-  document.getElementById('closeGeneralCashBtn')?.addEventListener('click', openCloseGeneralCashModal);
-  document.getElementById('homeOutflowsBtn')?.addEventListener('click', () => navigateTo('pos/salidas'));
   startCashBtn?.addEventListener('click', () => { settingsCard?.classList.add('hidden'); openStartCashModal(); });
   openNewSaleBtn?.addEventListener('click', () => {
     state.currentCart = [];
     activeSaleCategory = '';
-    saleSearchQuery = '';
     if (paymentType) paymentType.value = 'efectivo';
     if (cashAmount) cashAmount.value = '';
     if (partialPaidAmount) partialPaidAmount.value = '';
@@ -5778,15 +6153,9 @@ function wireEvents() {
     debtFields?.classList.add('hidden');
     partialFields?.classList.add('hidden');
     renderSaleSelectors();
-    renderTouchSaleUi();
     renderCart();
     syncSaleUiModeVisibility();
     syncSaleSubmitVisibility();
-  });
-  document.getElementById('saleSearchInput')?.addEventListener('input', (e) => {
-    saleSearchQuery = String(e?.target?.value || '').trim();
-    renderSaleSelectors();
-    renderTouchSaleUi();
   });
   paymentType?.addEventListener('change', () => {
     const t = paymentType.value;
@@ -5808,6 +6177,7 @@ function wireEvents() {
   closeCashBtnCard?.addEventListener('click', closeCashSession);
   goSalesBtn?.addEventListener('click', () => navigateTo('pos/ventas'));
   goCashClosingsBtn?.addEventListener('click', () => navigateTo('cash/closings'));
+  goWarehouseBtn?.addEventListener('click', () => navigateTo('warehouse'));
   backHomeBtn?.addEventListener('click', () => navigateTo('home', { replace: true }));
   openSettingsBtn?.addEventListener('click', () => navigateTo('settings'));
   document.getElementById('goSalesModeBtn')?.addEventListener('click', () => navigateTo('sales-mode'));
@@ -5850,13 +6220,8 @@ function wireEvents() {
     applySettings();
     renderBillingPreview();
   });
-  cloudProviderInput?.addEventListener('change', () => {
-    if (cloudProviderInput?.value === 'firebase' && cloudAuthTypeInput) cloudAuthTypeInput.value = 'firebase_query';
-    refreshDatabaseConfigUi();
-  });
-  cloudAuthTypeInput?.addEventListener('change', refreshDatabaseConfigUi);
-  saveDatabaseConfigBtn?.addEventListener('click', saveDatabaseSettings);
-  syncNowBtn?.addEventListener('click', async () => { try { await syncToCloud(); if (syncStatus) syncStatus.textContent = 'Sincronización completada.'; } catch {} });
+  openDatabaseConfigBtn?.classList.add('hidden');
+  syncNowBtn?.addEventListener('click', async () => { try { await syncToCloud({ includeHistory: true, modules: ['config', 'catalog', 'operations', 'warehouse', 'history'] }); if (syncStatus) syncStatus.textContent = 'Sincronizado con Firebase.'; } catch {} });
   backFromMainConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   backFromUsersConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
   backFromDatabaseConfigBtn?.addEventListener('click', () => navigateTo(parentRoute(normalizeRoute(window.location.hash || '#home')), { replace: true }));
@@ -5918,11 +6283,6 @@ function wireEvents() {
   openManageCategoriesBtn?.addEventListener('click', () => navigateTo('pos/productos-categorias'));
   openCreateComboBtn?.addEventListener('click', () => { navigateTo('pos/productos-combo'); });
   openProductsListBtn?.addEventListener('click', () => navigateTo('pos/productos-lista'));
-  document.getElementById('applyProductSortBtn')?.addEventListener('click', () => {
-    const selected = String(document.getElementById('productSortMode')?.value || 'category');
-    productSortMode = ['category', 'name', 'price'].includes(selected) ? selected : 'category';
-    renderProducts();
-  });
   backFromProductsListBtn?.addEventListener('click', () => navigateTo(parentRoute(navStack[navStack.length - 1] || 'home'), { replace: true }));
   openStockBtn?.addEventListener('click', () => navigateTo('stock'));
   backFromStockBtn?.addEventListener('click', () => stockCard?.classList.add('hidden'));
@@ -5942,24 +6302,19 @@ function wireEvents() {
   backFromCreateProductBtn?.addEventListener('click', () => navigateTo(parentRoute(navStack[navStack.length - 1] || 'home'), { replace: true }));
   backFromManageCategoriesBtn?.addEventListener('click', () => navigateTo(parentRoute(navStack[navStack.length - 1] || 'home'), { replace: true }));
   backFromCreateComboBtn?.addEventListener('click', () => navigateTo(parentRoute(navStack[navStack.length - 1] || 'home'), { replace: true }));
-  productCategory?.addEventListener('change', () => renderProductSubCategoryOptions(productCategory.value));
   productForm?.addEventListener('submit', (e) => {
     e.preventDefault();
     const category = productCategory?.value || '';
-    const subcategoryId = productSubCategory?.value || null;
     const name = productName?.value?.trim() || '';
     const price = Number(productPrice?.value || 0);
     if (!category || !name || price <= 0) return;
-    state.products.push({ id: uid(), category, subcategoryId, name, price, hidden: false });
+    state.products.push({ id: uid(), category, name, price, hidden: false });
     if (productName) productName.value = '';
     if (productPrice) productPrice.value = '';
-    if (productSubCategory) productSubCategory.value = '';
     persist();
-    Promise.resolve(syncToCloud()).catch((err) => console.error('[sync] create product failed', err));
     renderProducts();
-    renderSubCategoryParents();
-    renderSubCategoriesTable();
     renderSaleSelectors();
+    renderTouchSaleUi();
   });
   addCategoryBtn?.addEventListener('click', () => {
     const cat = newCategoryInput?.value?.trim() || '';
@@ -5968,79 +6323,8 @@ function wireEvents() {
     if (newCategoryInput) newCategoryInput.value = '';
     persist();
     renderProducts();
-    renderSubCategoryParents();
-    renderSubCategoriesTable();
-    renderSaleSelectors();
-  });
-
-  addSubCategoryBtn?.addEventListener('click', async () => {
-    const cat = subCategoryParentSelect?.value || '';
-    const name = subCategoryNameInput?.value?.trim() || '';
-    if (!cat || !name) return;
-    state.subcategories = state.subcategories || {};
-    const list = Array.isArray(state.subcategories[cat]) ? state.subcategories[cat] : [];
-    if (list.some((x) => String(x.name || '').toLowerCase() === name.toLowerCase())) return;
-    list.push({ id: uid(), name, image: '' });
-    state.subcategories[cat] = list;
-    persist();
-    try { await syncToCloud(); } catch {}
-    if (subCategoryNameInput) subCategoryNameInput.value = '';
-    renderProducts();
-    renderSubCategoryParents();
-    renderSubCategoriesTable();
     renderSaleSelectors();
     renderTouchSaleUi();
-  });
-
-  subCategoriesTable?.addEventListener('click', async (e) => {
-    const del = e.target.closest('button[data-sub-del]');
-    const edit = e.target.closest('button[data-sub-edit]');
-    const up = e.target.closest('button[data-sub-img-up]');
-    const rmImg = e.target.closest('button[data-sub-img-del]');
-    if (up) {
-      const [cat, id] = String(up.dataset.subImgUp || '').split('::');
-      openImageUploadForSubCategory(cat, id);
-      return;
-    }
-    if (rmImg) {
-      const [cat, id] = String(rmImg.dataset.subImgDel || '').split('::');
-      const item = findSubCategory(cat, id);
-      if (!item) return;
-      const previous = item.image || '';
-      item.image = '';
-      persistImageChange(() => { item.image = previous; });
-      try { await syncToCloud(); } catch {}
-      renderProducts();
-      renderSubCategoriesTable();
-      renderSaleSelectors();
-      renderTouchSaleUi();
-      return;
-    }
-    if (del) {
-      const [cat, id] = String(del.dataset.subDel || '').split('::');
-      state.subcategories[cat] = (state.subcategories[cat] || []).filter((x) => String(x.id) !== String(id));
-      state.products = (state.products || []).map((p) => (String(p.subcategoryId || '') === String(id) ? { ...p, subcategoryId: null } : p));
-      persist();
-      try { await syncToCloud(); } catch {}
-      renderSubCategoriesTable();
-      renderProducts();
-      renderSaleSelectors();
-      renderTouchSaleUi();
-      return;
-    }
-    if (edit) {
-      const [cat, id] = String(edit.dataset.subEdit || '').split('::');
-      const item = findSubCategory(cat, id);
-      if (!item) return;
-      const name = prompt('Nuevo nombre de subcategoría', item.name || '') || item.name;
-      item.name = String(name || '').trim() || item.name;
-      persist();
-      try { await syncToCloud(); } catch {}
-      renderProducts();
-      renderSubCategoriesTable();
-      renderSaleSelectors();
-      renderTouchSaleUi();
-    }
   });
   createComboBtn?.addEventListener('click', () => {
     const name = comboNameInput?.value?.trim() || '';
@@ -6048,7 +6332,7 @@ function wireEvents() {
     const ids = state.comboBuilderItems.length ? state.comboBuilderItems.map((p) => p.id) : (state.comboDraft.length ? state.comboDraft.map((p) => p.id) : Array.from(comboProductsSelect?.selectedOptions || []).map((o) => o.value));
     if (!name || price <= 0 || !ids.length) return;
     if (!state.categories.includes('Combos')) state.categories.push('Combos');
-    state.products.push({ id: uid(), category: 'Combos', subcategoryId: null, name, price, hidden: false, combo: ids });
+    state.products.push({ id: uid(), category: 'Combos', name, price, hidden: false, combo: ids });
     state.comboBuilderItems = [];
     if (comboItemsTable) comboItemsTable.innerHTML = '';
     if (comboNameInput) comboNameInput.value = '';
@@ -6056,9 +6340,8 @@ function wireEvents() {
     if (comboCalculatedTotal) comboCalculatedTotal.textContent = 'Total original: Bs 0.00';
     persist();
     renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
     renderSaleSelectors();
+    renderTouchSaleUi();
   });
   comboProductsSelect?.addEventListener('change', () => {
     const ids = Array.from(comboProductsSelect.selectedOptions).map((o) => o.value);
@@ -6066,6 +6349,26 @@ function wireEvents() {
     if (comboCalculatedTotal) comboCalculatedTotal.textContent = money(total);
   });
   productsTable?.addEventListener('click', (e) => {
+    const up = e.target.closest('button[data-prod-up]');
+    if (up) {
+      if (!moveProductWithinCategory(up.dataset.prodUp, -1)) return;
+      markModulesDirty(['catalog'], 'product-order-local');
+      persist();
+      renderProducts();
+      renderSaleSelectors();
+      renderTouchSaleUi();
+      return;
+    }
+    const down = e.target.closest('button[data-prod-down]');
+    if (down) {
+      if (!moveProductWithinCategory(down.dataset.prodDown, 1)) return;
+      markModulesDirty(['catalog'], 'product-order-local');
+      persist();
+      renderProducts();
+      renderSaleSelectors();
+      renderTouchSaleUi();
+      return;
+    }
     const edit = e.target.closest('button[data-prod-edit]');
     if (edit) {
       openProductEditModal(edit.dataset.prodEdit);
@@ -6078,9 +6381,8 @@ function wireEvents() {
       p.hidden = !p.hidden;
       persist();
       renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
       renderSaleSelectors();
+      renderTouchSaleUi();
       return;
     }
     const upImg = e.target.closest('button[data-prod-img]');
@@ -6106,22 +6408,42 @@ function wireEvents() {
       const ok = persistImageChange(() => { if (previous) p.imageUrl = previous; });
       if (!ok) return;
       renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
       renderTouchSaleUi();
       return;
     }
     const del = e.target.closest('button[data-prod-del]');
     if (!del) return;
-    state.products = state.products.filter((p) => p.id !== del.dataset.prodDel);
-    persist();
+    const removedId = String(del.dataset.prodDel || '');
+    if (!removedId) return;
+    state.products = state.products.filter((p) => p.id !== removedId);
+    state.deletedRecordIds = state.deletedRecordIds || { cashClosings: [], sales: [], products: [], categories: [] };
+    if (!Array.isArray(state.deletedRecordIds.products)) state.deletedRecordIds.products = [];
+    if (!state.deletedRecordIds.products.includes(removedId)) state.deletedRecordIds.products.push(removedId);
+    persist({ includeHistory: true });
     renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
     renderSaleSelectors();
+    renderTouchSaleUi();
   });
 
   categoriesTable?.addEventListener('click', (e) => {
+    const up = e.target.closest('button[data-cat-up]');
+    if (up) {
+      if (!moveCategory(up.dataset.catUp, -1)) return;
+      persist();
+      renderProducts();
+      renderSaleSelectors();
+      renderTouchSaleUi();
+      return;
+    }
+    const down = e.target.closest('button[data-cat-down]');
+    if (down) {
+      if (!moveCategory(down.dataset.catDown, 1)) return;
+      persist();
+      renderProducts();
+      renderSaleSelectors();
+      renderTouchSaleUi();
+      return;
+    }
     const imgBtn = e.target.closest('button[data-cat-img]');
     if (imgBtn) { openImageUploadForCategory(imgBtn.dataset.catImg); return; }
     const retryCatImg = e.target.closest('button[data-img-retry-kind="category"]');
@@ -6133,24 +6455,20 @@ function wireEvents() {
       return;
     }
     const imgDelBtn = e.target.closest('button[data-cat-img-del]');
-    if (imgDelBtn) { const key = imgDelBtn.dataset.catImgDel || ''; const previous = state.categoryImages[key] || ''; delete state.categoryImages[key]; const ok = persistImageChange(() => { if (previous) state.categoryImages[key] = previous; }); if (!ok) return; renderProducts(); renderTouchSaleUi(); return; }
+    if (imgDelBtn) { const key = imgDelBtn.dataset.catImgDel || ''; const previous = state.categoryImages[key] || ''; delete state.categoryImages[key]; const ok = persistImageChange(() => { if (previous) state.categoryImages[key] = previous; }); if (!ok) return; renderProducts(); renderSaleSelectors(); renderTouchSaleUi(); return; }
     const b = e.target.closest('button[data-cat-del]');
     if (!b) return;
-    const cat = b.dataset.catDel;
+    const cat = String(b.dataset.catDel || '').trim();
+    if (!cat) return;
     state.categories = state.categories.filter((c) => c !== cat);
-    delete state.subcategories[cat];
-    state.products.forEach((p) => {
-      if (p.category === cat) {
-        p.category = 'Todos';
-        p.subcategoryId = null;
-      }
-    });
-    persist();
+    state.products.forEach((p) => { if (p.category === cat) p.category = 'Todos'; });
+    if (state.categoryImages && Object.prototype.hasOwnProperty.call(state.categoryImages, cat)) delete state.categoryImages[cat];
+    state.deletedRecordIds = state.deletedRecordIds || { cashClosings: [], sales: [], products: [], categories: [] };
+    if (!Array.isArray(state.deletedRecordIds.categories)) state.deletedRecordIds.categories = [];
+    if (!state.deletedRecordIds.categories.includes(cat)) state.deletedRecordIds.categories.push(cat);
+    persist({ includeHistory: true });
     renderProducts();
-    renderSubCategoryParents();
-    renderSubCategoriesTable();
     renderSaleSelectors();
-    renderTouchSaleUi();
   });
   addComboItemsBtn?.addEventListener('click', () => { renderComboBuilder(); });
   goHistorialBtn?.addEventListener('click', () => navigateTo('pos/historial'));
@@ -6159,21 +6477,10 @@ function wireEvents() {
   backFromConfigVentasBtn?.addEventListener('click', () => navigateTo(parentRoute(navStack[navStack.length - 1] || 'home'), { replace: true }));
 
   addOutflowBtn?.addEventListener('click', () => {
-    const caja = document.getElementById('outflowCashBoxType')?.value || 'caja_dia';
-    if (caja === 'caja_dia' && !getActiveCashBox()) return;
-    if (caja === 'caja_general' && !isGeneralCashOpen()) return;
+    if (!getActiveCashBox()) return;
     const amount = Number(outflowAmount?.value || 0);
     if (amount <= 0) return;
-    const direction = outflowDirection?.value || 'salida';
-    const method = outflowMethod?.value || 'efectivo';
-    if (caja === 'caja_general') {
-      const current = Number(state.generalCash?.[method] || 0);
-      const next = direction === 'entrada' ? current + amount : current - amount;
-      if (next < 0) return alert('La caja general no tiene saldo suficiente.');
-      state.generalCash[method] = next;
-      state.generalCash.updatedAt = Date.now();
-    }
-    state.outflows.unshift({ id: uid(), tipo: direction, caja, cashBoxId: caja === 'caja_dia' ? (state.activeCashBoxId || '') : '', createdAt: new Date().toISOString(), direction, method, description: outflowDescription?.value || '', amount, user: state.currentUser?.username || '-' });
+    state.outflows.unshift({ id: uid(), cashBoxId: state.activeCashBoxId || '', createdAt: new Date().toISOString(), direction: outflowDirection?.value || 'salida', method: outflowMethod?.value || 'efectivo', description: outflowDescription?.value || '', amount, user: state.currentUser?.username || '-' });
     if (outflowAmount) outflowAmount.value = '';
     if (outflowDescription) outflowDescription.value = '';
     persist();
@@ -6182,21 +6489,26 @@ function wireEvents() {
   outflowsTable?.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-out-del]');
     if (!b) return;
-    const row = (state.outflows || []).find((o) => o.id === b.dataset.outDel);
-    if (!row) return;
-    if (row.caja === 'caja_general') {
-      const method = row.method || 'efectivo';
-      const current = Number(state.generalCash?.[method] || 0);
-      state.generalCash[method] = row.direction === 'entrada' ? Math.max(0, current - Number(row.amount || 0)) : current + Number(row.amount || 0);
-      state.generalCash.updatedAt = Date.now();
-    }
     state.outflows = state.outflows.filter((o) => o.id !== b.dataset.outDel);
     persist();
     refreshFinancialViews();
   });
   createSaleBtn?.addEventListener('click', registerSale);
   saleSuccessContinueBtn?.addEventListener('click', hideSaleSuccessModal);
-  closingsMonthFilter?.addEventListener('change', renderCashClosings);
+  searchClosingsBtn?.addEventListener('click', () => {
+    const month = String(closingsMonthFilter?.value || '').trim();
+    searchCashClosingsByMonth(month).catch((err) => {
+      console.error('[cash][closings] search failed', err);
+      state.cashClosings = [];
+      state.cashClosingsLoaded = true;
+      state.cashClosingsSearchMonth = month;
+      renderCashClosings();
+    });
+  });
+  clearClosingsBtn?.addEventListener('click', () => {
+    if (closingsMonthFilter) closingsMonthFilter.value = '';
+    resetCashClosingsSearch({ render: false });
+  });
   tabs.forEach((tab) => tab.addEventListener('click', () => {
     const map = {
       ventas: 'pos/ventas',
@@ -6244,13 +6556,42 @@ function wireEvents() {
   searchSalesBtn?.addEventListener('click', renderSalesHistory);
   salesOrderSearchInput?.addEventListener('input', renderSalesHistory);
   clearSalesFilterBtn?.addEventListener('click', () => { if (salesUserFilter) salesUserFilter.value=''; if (salesOrderSearchInput) salesOrderSearchInput.value=''; renderSalesHistory(); });
+  if (clearSalesFilterBtn && !document.getElementById('salesSaveChangesBtn')) {
+    const saveBtn = document.createElement('button');
+    saveBtn.id = 'salesSaveChangesBtn';
+    saveBtn.className = 'secondary';
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Guardar cambios';
+    saveBtn.style.marginLeft = '0.5rem';
+    clearSalesFilterBtn.insertAdjacentElement('afterend', saveBtn);
+    saveBtn.addEventListener('click', async () => {
+      if (!pendingSalesAnnulSyncChanges) return;
+      saveBtn.disabled = true;
+      try {
+        await syncToCloud({ modules: ['catalog', 'operations'], includeHistory: true, reason: 'sales-annul-manual-save' });
+        await pullFromCloud({ force: true, modules: ['catalog', 'operations', 'history'], reason: 'sales-annul-manual-verify', includeHistory: true });
+        const annulsOk = [...pendingAnnulSaleIds].every((saleId) => {
+          const sale = (state.sales || []).find((s) => s.id === saleId);
+          return sale && isSaleAnnulled(sale);
+        });
+        if (!annulsOk) throw new Error('Verificación post-guardado de anulaciones no consistente.');
+        pendingSalesAnnulSyncChanges = false;
+        pendingAnnulSaleIds.clear();
+      } catch (err) {
+        console.error('[sale][annul-manual-save] error', err);
+        pendingSalesAnnulSyncChanges = true;
+      } finally {
+        refreshPendingSyncButtons();
+      }
+    });
+  }
   openProductSalesReportBtn?.addEventListener('click', () => { productSalesReportCard?.classList.remove('hidden'); renderProductSalesReport(); });
   closeProductSalesReportBtn?.addEventListener('click', () => productSalesReportCard?.classList.add('hidden'));
   searchDeletedSalesBtn?.addEventListener('click', renderDeletedSales);
   clearDeletedSalesFilterBtn?.addEventListener('click', () => { if (deletedSalesFromDate) deletedSalesFromDate.value=''; if (deletedSalesToDate) deletedSalesToDate.value=''; renderDeletedSales(); });
   clearDeletedSalesBtn?.addEventListener('click', () => { state.deletedSales = []; persist(); renderDeletedSales(); });
   salesUserFilter?.addEventListener('change', renderSalesHistory);
-  salesTable?.addEventListener('click', (e) => {
+  salesTable?.addEventListener('click', async (e) => {
     const b = e.target.closest('button[data-sale-id]');
     if (!b) return;
     const sale = state.sales.find((s) => s.id === b.dataset.saleId);
@@ -6269,9 +6610,20 @@ function wireEvents() {
       return;
     }
     if (b.dataset.saleAct === 'del') {
-      if (!hasPermission('deleteSales')) return alert('No tienes permiso para eliminar ventas.');
+      if (!hasPermission('deleteSales')) return alert('No tienes permiso para anular ventas.');
+      const confirmed = await confirmSaleAnnulment(sale);
+      if (!confirmed) return;
+      if (isSaleAnnulled(sale)) return;
       const annulCount = annulDebtPaymentsBySaleId(sale.id, state.currentUser?.username || '-');
-      state.deletedSales.unshift({ ...sale, deletedAt: new Date().toISOString(), deletedBy: state.currentUser?.username || '-', annulledDebtPayments: annulCount });
+      const annulledAt = new Date().toISOString();
+      sale.saleStatus = 'ANULADA';
+      sale.deletedBy = state.currentUser?.username || '-';
+      sale.deletedAt = annulledAt;
+      sale.annulledAt = annulledAt;
+      sale.modifiedAt = Date.now();
+      const deletedSnapshot = { ...sale, saleStatus: 'ANULADA', deletedAt: annulledAt, deletedBy: state.currentUser?.username || '-', annulledDebtPayments: annulCount };
+      state.deletedSales = (state.deletedSales || []).filter((x) => x.id !== sale.id);
+      state.deletedSales.unshift(deletedSnapshot);
       if (isStockEnabled()) {
         (sale.items || []).forEach((it) => {
           const p = state.products.find((x) => x.id === it.id || normalizeProductName(x.name) === normalizeProductName(it.name));
@@ -6288,11 +6640,11 @@ function wireEvents() {
         });
       }
       applyWarehouseImpactFromSaleItems(sale.items, { reverse: true, saleId: `#${orderNumberLabel(sale.orderNumber)}` });
-      state.sales = state.sales.filter((x) => x.id !== sale.id);
-      state.deletedRecordIds = state.deletedRecordIds || { cashClosings: [], sales: [] };
-      if (!Array.isArray(state.deletedRecordIds.sales)) state.deletedRecordIds.sales = [];
-      if (!state.deletedRecordIds.sales.includes(sale.id)) state.deletedRecordIds.sales.push(sale.id);
-      persist();
+      markModulesDirty(['catalog', 'operations', 'history'], 'sale-annul-local');
+      persist({ includeHistory: true, sync: false });
+      pendingAnnulSaleIds.add(String(sale.id));
+      pendingSalesAnnulSyncChanges = true;
+      refreshPendingSyncButtons();
       refreshFinancialViews();
       renderWarehouse();
       return;
@@ -6378,7 +6730,7 @@ function wireEvents() {
     const componentId = warehouseMoveComponentSelect?.value || '';
     const qty = Math.max(0.01, Number(warehouseMoveQtyInput?.value || 0));
     if (!componentId || !qty) return;
-    registerComponentMove({ componentId, tipo: 'compra', cantidad: qty, descripcion: (warehouseMoveDescInput?.value || '').trim() || 'Compra de componentes' });
+    registerComponentMove({ componentId, tipo: 'compra', cantidad: qty, descripcion: (warehouseMoveDescInput?.value || '').trim() || 'Compra de almacén' });
     if (warehouseMoveDescInput) warehouseMoveDescInput.value = '';
     persist();
     renderWarehouse();
@@ -6425,8 +6777,6 @@ function wireEvents() {
     prod.stockCurrent = Number(prod.stockCurrent || 0) + qty;
     persist();
     renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
     renderSaleSelectors();
     renderStockPage();
   });
@@ -6448,8 +6798,6 @@ function wireEvents() {
     product.stockCurrent = 0;
     persist();
     renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
     renderSaleSelectors();
     renderStockPage();
   });
@@ -6458,8 +6806,6 @@ function wireEvents() {
     state.products.forEach((p) => { p.stockCurrent = 0; });
     persist();
     renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
     renderSaleSelectors();
     renderStockPage();
   });
@@ -6525,8 +6871,9 @@ function wireEvents() {
 }
 
 async function bootstrap() {
-  loadLocalState();
+  console.info('[boot][start]', { at: new Date().toISOString() });
   normalizeCloudSettings();
+  ['config', 'operations'].forEach((moduleName) => markModuleHydrated(moduleName, false, { source: 'bootstrap-reset' }));
   ensureUsers();
   ensureSeedData();
   ensureProductStockDefaults();
@@ -6535,26 +6882,32 @@ async function bootstrap() {
   if (!state.userSalesModes || typeof state.userSalesModes !== 'object') state.userSalesModes = {};
   if (!state.touchUiConfigByUser || typeof state.touchUiConfigByUser !== 'object') state.touchUiConfigByUser = {};
   if (!state.categoryImages || typeof state.categoryImages !== 'object') state.categoryImages = {};
-  if (!state.subcategories || typeof state.subcategories !== 'object') state.subcategories = {};
 
+  (state.products || []).forEach((p) => {
+    if (p?.imageUrl && String(p.imageUrl).startsWith('idb:')) delete p.imageUrl;
+    if (!p?.imageUrl && p?.imageDataUrl && !String(p.imageDataUrl).startsWith('data:')) p.imageUrl = p.imageDataUrl;
+    if (p?.imageDataUrl && String(p.imageDataUrl).startsWith('idb:')) delete p.imageDataUrl;
+  });
+  Object.keys(state.categoryImages || {}).forEach((key) => {
+    const raw = String(state.categoryImages[key] || '');
+    if (raw.startsWith('idb:')) delete state.categoryImages[key];
+  });
 
   if (!state.orderCounters || typeof state.orderCounters !== 'object') state.orderCounters = {};
-  if (!state.deletedRecordIds || typeof state.deletedRecordIds !== 'object') state.deletedRecordIds = { cashClosings: [], sales: [] };
+  if (!state.deletedRecordIds || typeof state.deletedRecordIds !== 'object') state.deletedRecordIds = { cashClosings: [], sales: [], products: [], categories: [] };
   if (!Array.isArray(state.deletedRecordIds.cashClosings)) state.deletedRecordIds.cashClosings = [];
   if (!Array.isArray(state.deletedRecordIds.sales)) state.deletedRecordIds.sales = [];
-  if (!state.moduleUpdatedAt || typeof state.moduleUpdatedAt !== 'object') state.moduleUpdatedAt = {};
-  if (!state.moduleHydration || typeof state.moduleHydration !== 'object') state.moduleHydration = {};
-  if (!Array.isArray(state.syncLogs)) state.syncLogs = [];
+  if (!Array.isArray(state.deletedRecordIds.products)) state.deletedRecordIds.products = [];
+  if (!Array.isArray(state.deletedRecordIds.categories)) state.deletedRecordIds.categories = [];
   normalizeWarehouseData();
   normalizeDebtPaymentsData();
   normalizeCashState();
-  buildStateIndexes();
-  markModulesHydrated(ALL_MODULES);
+  bootCashReady = Boolean(getActiveCashBox() || state.systemStatus === 'CAJA_CERRADA');
+  console.info('[boot][cash-ready]', { bootCashReady, activeCashBoxId: state.activeCashBoxId || '', systemStatus: state.systemStatus });
   syncAppConfig();
   saveLocalState();
   applySettings();
   ensureSalesModeButton();
-  ensureGeneralCashUi();
   wireEvents();
   Promise.resolve().then(() => ensureJsPdfLibs()).catch(() => {});
   renderOrdersVisibility();
@@ -6568,26 +6921,54 @@ async function bootstrap() {
   renderDeletedSales();
   renderDebtPayments();
   renderProducts();
-  renderSubCategoryParents();
-  renderSubCategoriesTable();
   renderOutflows();
   renderWarehouse();
   renderSummary();
   renderSoldProductsList();
-  restoreSessionFromStorage();
+  let cloudBootHydrated = false;
   const validSession = Boolean(state.currentUser && currentUserRecord());
-    window.addEventListener('hashchange', () => { if (applyingRoute) return; applyRoute(); });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) pullFromCloud({ force: true }); });
-  window.addEventListener('online', () => { pullFromCloud({ force: true }); });
+  window.addEventListener('storage', (e) => {
+    if (!e.key || !e.key.startsWith('cafeteria_') || document.hidden) return;
+    pullFromCloud({ modules: ['operations'], reason: 'storage' });
+  });
+  window.addEventListener('hashchange', () => { if (applyingRoute) return; applyRoute(); });
+  setInterval(() => {
+    if (document.hidden || firebaseRealtimeListener) return;
+    pullFromCloud({ modules: ['operations'], reason: 'polling' });
+  }, Math.max(CLOUD_POLL_INTERVAL_MS * 3, 25000));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) pullFromCloud({ modules: ['operations'], reason: 'visibilitychange' });
+  });
+  window.addEventListener('online', () => {
+    pullFromCloud({ modules: ['operations', 'config'], reason: 'online' });
+    startFirebaseRealtimeListener();
+  });
   Promise.resolve().then(() => migrateCategoryImageRefsToDataUrls()).catch(() => {});
-  await ensureCloudSeedData();
-  await startFirebaseRealtimeListener();
-  if (state.currentUser && validSession) {
-    try { await pullFromCloud({ force: true }); } catch {}
-  } else {
-    Promise.resolve().then(() => pullFromCloud({ force: true })).catch(() => {});
+  try {
+    await ensureCloudSeedData({ force: true });
+    await pullFromCloud({ force: true, modules: MODULE_DEFAULT_BOOT_ORDER, reason: 'bootstrap-critical' });
+    cloudBootHydrated = MODULE_DEFAULT_BOOT_ORDER.every((moduleName) => isModuleHydrated(moduleName));
+    bootCloudReady = cloudBootHydrated;
+    console.info('[boot][cloud-ready]', { cloudBootHydrated, lastSyncAt: state.lastSyncAt || 0, bootModules: MODULE_DEFAULT_BOOT_ORDER });
+  } catch (err) {
+    console.error('[bootstrap] No se pudo hidratar módulos críticos al inicio. Se mantiene caché local.', { message: err?.message });
   }
-  cloudHydrated = true;
+  Promise.resolve().then(async () => {
+    try {
+      await pullFromCloud({ modules: MODULE_BACKGROUND_BOOT_ORDER, reason: 'bootstrap-background' });
+      console.info('[boot][background-ready]', { modules: MODULE_BACKGROUND_BOOT_ORDER });
+    } catch (err) {
+      console.warn('[boot][background-warning]', { message: err?.message });
+    }
+  });
+  if (!cloudBootHydrated && state.currentUser && validSession) {
+    try {
+      await pullFromCloud({ force: true, modules: ['operations'], reason: 'bootstrap-retry' });
+    } catch {}
+  }
+  cloudHydrated = cloudHydrated || cloudBootHydrated;
+  console.info('[boot][sales-ready]', { salesCount: state.sales?.length || 0, cloudHydrated });
+  startFirebaseRealtimeListener();
   maybeForceLogoutFromClosure();
   if (state.currentUser && validSession && validateSessionPolicy({ silent: true })) {
     navStack = ['home'];
