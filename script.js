@@ -3198,10 +3198,13 @@ function renderUsers() {
   const saveUsersBtn = document.getElementById('saveUsersChangesBtn');
   if (saveUsersBtn) saveUsersBtn.onclick = async () => {
     console.info('[users][save] Guardando usuarios manualmente', { usersCount: state.users?.length || 0 });
+    markModulesDirty(['config'], 'users-manual-save-local');
     persist({ module: 'users' });
     try {
-      await syncToCloud();
-      await pullFromCloud({ force: true });
+      await syncToCloud({ modules: ['config'], reason: 'users-manual-save' });
+      await pullFromCloud({ force: true, modules: ['config'], reason: 'users-manual-save-verify' });
+      const usersOk = (state.users || []).length > 0;
+      if (!usersOk) throw new Error('Verificación de usuarios falló tras guardado.');
       setMsg(homeMessage, 'Usuarios y permisos guardados correctamente.');
     } catch (err) {
       console.error('[users][sync] Error guardando usuarios en cloud', { message: err?.message, code: err?.code, status: err?.status });
@@ -3291,12 +3294,16 @@ function importUsersFromExcelFile(file) {
       state.users = [...usersMap.values()];
       console.info('[users][import] usuarios cargados desde XLSX', { importedRows: rows.length, usersCount: state.users.length });
       ensureUsers();
+      const importedUsernames = [...usersMap.values()].map((u) => String(u.username || '').trim()).filter(Boolean);
+      markModulesDirty(['config'], 'users-import-local');
       persist({ module: 'users' });
       renderUsers();
       Promise.resolve().then(async () => {
         try {
-          await syncToCloud();
-          await pullFromCloud({ force: true });
+          await syncToCloud({ modules: ['config'], reason: 'users-import' });
+          await pullFromCloud({ force: true, modules: ['config'], reason: 'users-import-verify' });
+          const remoteOk = importedUsernames.every((username) => (state.users || []).some((u) => String(u.username || '').trim().toLowerCase() === username.toLowerCase()));
+          if (!remoteOk) throw new Error('Verificación de usuarios importados falló en remoto.');
           console.info('[users][sync] usuarios importados sincronizados', { usersCount: state.users.length });
           alert('Usuarios importados correctamente.');
         } catch (err) {
