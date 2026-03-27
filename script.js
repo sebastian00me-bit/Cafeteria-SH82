@@ -1764,7 +1764,7 @@ function ensureSeedData() {
 
 
 function ensureProductStockDefaults() {
-  state.products = (state.products || []).map((p) => ({ ...p, stockCurrent: Number(p.stockCurrent || 0), cost: Math.max(0, Number(p.cost || 0)), stockMin: Math.max(0, Number(p.stockMin ?? appConfig.stockMinimo || 0)), stockEnabled: p.stockEnabled !== false }));
+  state.products = (state.products || []).map((p) => ({ ...p, stockCurrent: Number(p.stockCurrent || 0), cost: Math.max(0, Number(p.cost || 0)), stockMin: Math.max(0, Number((p.stockMin ?? appConfig.stockMinimo ?? 0))), stockEnabled: p.stockEnabled !== false }));
   state.stockWriteOffs = Array.isArray(state.stockWriteOffs) ? state.stockWriteOffs : [];
 }
 
@@ -1773,7 +1773,7 @@ function isProductStockTracked(product) {
 }
 
 function productStockMin(product) {
-  return Math.max(0, Number(product?.stockMin ?? appConfig.stockMinimo || 0));
+  return Math.max(0, Number((product?.stockMin ?? appConfig.stockMinimo ?? 0)));
 }
 
 
@@ -7241,22 +7241,25 @@ async function bootstrap() {
   applySettings();
   ensureSalesModeButton();
   wireEvents();
+  const safeRun = (label, fn) => {
+    try { fn(); } catch (err) { console.error(`[boot][safe-run] ${label} failed`, err); }
+  };
   Promise.resolve().then(() => ensureJsPdfLibs()).catch(() => {});
-  renderOrdersVisibility();
+  safeRun('renderOrdersVisibility', () => renderOrdersVisibility());
   beginSessionWatcher();
-  renderSaleSelectors();
-  renderCart();
-  renderPeopleSelectors();
-  renderDebtors();
-  renderOrders(false);
-  renderSalesHistory();
-  renderDeletedSales();
-  renderDebtPayments();
-  renderProducts();
-  renderOutflows();
-  renderWarehouse();
-  renderSummary();
-  renderSoldProductsList();
+  safeRun('renderSaleSelectors', () => renderSaleSelectors());
+  safeRun('renderCart', () => renderCart());
+  safeRun('renderPeopleSelectors', () => renderPeopleSelectors());
+  safeRun('renderDebtors', () => renderDebtors());
+  safeRun('renderOrders', () => renderOrders(false));
+  safeRun('renderSalesHistory', () => renderSalesHistory());
+  safeRun('renderDeletedSales', () => renderDeletedSales());
+  safeRun('renderDebtPayments', () => renderDebtPayments());
+  safeRun('renderProducts', () => renderProducts());
+  safeRun('renderOutflows', () => renderOutflows());
+  safeRun('renderWarehouse', () => renderWarehouse());
+  safeRun('renderSummary', () => renderSummary());
+  safeRun('renderSoldProductsList', () => renderSoldProductsList());
   let cloudBootHydrated = false;
   const validSession = Boolean(state.currentUser && currentUserRecord());
   window.addEventListener('storage', (e) => {
