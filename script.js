@@ -341,10 +341,10 @@ const billingAutoPrintIndicator = $('billingAutoPrintIndicator');
 const billingAutoPrintToggleActionBtn = $('billingAutoPrintToggleActionBtn');
 const closeCashBtnCard = $('closeCashBtn');
 let activeSaleCategory = '';
-let saleSearchQuery = '';
 let activeOrderId = '';
 let isSubmittingSale = false;
 let saleProceedReady = false;
+let summaryDailySalesVisible = false;
 state.currentCart = [];
 state.outflows = JSON.parse(localStorage.getItem('cafeteria_outflows') || '[]');
 state.comboDraft = [];
@@ -1869,18 +1869,6 @@ function renderSaleSelectors() {
   }
   if (activeSaleCategory && !cats.includes(activeSaleCategory)) activeSaleCategory = '';
   saleCategoryButtons.innerHTML = '';
-  const searchWrap = document.createElement('div');
-  searchWrap.className = 'grid3';
-  searchWrap.innerHTML = `<label>Buscar producto<input id="saleSearchInput" type="text" value="${escapeHtml(saleSearchQuery)}" placeholder="Nombre del producto" /></label><button id="saleSearchBtn" class="secondary" type="button">Buscar</button><button id="saleSearchClearBtn" class="secondary" type="button">Limpiar</button>`;
-  saleCategoryButtons.appendChild(searchWrap);
-  document.getElementById('saleSearchBtn')?.addEventListener('click', () => {
-    saleSearchQuery = String(document.getElementById('saleSearchInput')?.value || '').trim();
-    renderSaleSelectors();
-  });
-  document.getElementById('saleSearchClearBtn')?.addEventListener('click', () => {
-    saleSearchQuery = '';
-    renderSaleSelectors();
-  });
   cats.forEach((c) => {
     const b = document.createElement('button');
     b.type = 'button';
@@ -1894,39 +1882,6 @@ function renderSaleSelectors() {
     if (!isStockEnabled()) return true;
     return !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0;
   }) : [];
-  const searchedList = saleSearchQuery
-    ? (state.products || [])
-      .filter((p) => !p.hidden && String(p.name || '').toLowerCase().includes(saleSearchQuery.toLowerCase()))
-      .sort((a, b) => {
-        const an = String(a.name || '').toLowerCase();
-        const bn = String(b.name || '').toLowerCase();
-        const q = saleSearchQuery.toLowerCase();
-        const as = an.startsWith(q) ? 0 : 1;
-        const bs = bn.startsWith(q) ? 0 : 1;
-        if (as !== bs) return as - bs;
-        return an.localeCompare(bn, 'es');
-      })
-    : [];
-  if (saleSearchQuery) {
-    saleCategorySelectors.innerHTML = `<div class="card"><h4>Resultado búsqueda</h4><table><thead><tr><th>Producto</th><th>Precio</th><th>Acción</th></tr></thead><tbody>${searchedList.length ? searchedList.map((p) => `<tr><td>${escapeHtml(p.name || '-')}</td><td>${money(p.price || 0)}</td><td><button class="secondary" data-search-add="${p.id}" type="button">Añadir</button></td></tr>`).join('') : '<tr><td colspan="3">Sin coincidencias.</td></tr>'}</tbody></table></div>`;
-    saleCategorySelectors.querySelectorAll('button[data-search-add]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const p = state.products.find((x) => x.id === btn.dataset.searchAdd);
-        if (!p) return;
-        if (isProductStockTracked(p) && Number(p.stockCurrent || 0) <= 0) return alert('Producto sin stock disponible.');
-        const e = state.currentCart.find((i) => i.id === p.id);
-        if (e) {
-          e.qty += 1;
-          const total = Number(e.price || 0) * Number(e.qty || 0);
-          e.finalSubtotal = total - (total * Number(e.discountPct || 0) / 100);
-        } else {
-          state.currentCart.push({ id: p.id, name: p.name, cost: Number(p.cost || 0), price: Number(p.price || 0), qty: 1, discountPct: 0, finalSubtotal: Number(p.price || 0) });
-        }
-        renderCart();
-      });
-    });
-    return;
-  }
   saleCategorySelectors.innerHTML = `<div class="card grid4"><label>Producto<select id="catProductSel"><option value="">Selecciona un producto</option>${list.map((p) => { const stock = Number(p.stockCurrent || 0); const noStock = isStockEnabled() && stock <= 0; const lowStock = isStockEnabled() && stock > 0 && stock <= Number(appConfig.stockMinimo || 0); const suffix = isStockEnabled() ? (noStock ? ' (Sin stock)' : (lowStock ? ` (Stock = ${stock})` : '')) : ''; const style = isStockEnabled() ? (noStock ? 'color:#c62f2f;' : (lowStock ? 'color:#b26a00;' : '')) : ''; return `<option value="${p.id}" ${noStock ? 'disabled' : ''} style="${style}">${p.name}${suffix} · ${money(p.price)}</option>`; }).join('')}</select></label><label>Cantidad<input id="catQty" type="number" min="1" step="1" value="1" /></label><label>Subtotal<input id="catSub" type="text" readonly value="${money(0)}" /></label><button id="catAdd" class="primary" type="button">Añadir</button></div>`;
   const sel = $('catProductSel');
   const qty = $('catQty');
@@ -2051,21 +2006,8 @@ function renderTouchSaleUi() {
   const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   state.touchUiState = state.touchUiState || { view: 'categories', category: '', page: 0 };
   const ui = state.touchUiState;
-  ui.search = ui.search || '';
   if (!cats.includes(ui.category)) { ui.category = ''; ui.view = 'categories'; ui.page = 0; }
-  const sourceList = ui.search
-    ? state.products.filter((p) => !p.hidden && String(p.name || '').toLowerCase().includes(String(ui.search || '').toLowerCase()))
-      .sort((a, b) => {
-        const an = String(a.name || '').toLowerCase();
-        const bn = String(b.name || '').toLowerCase();
-        const q = String(ui.search || '').toLowerCase();
-        const as = an.startsWith(q) ? 0 : 1;
-        const bs = bn.startsWith(q) ? 0 : 1;
-        if (as !== bs) return as - bs;
-        return an.localeCompare(bn, 'es');
-      })
-    : null;
-  const list = sourceList || (ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0));
+  const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0);
   const pages = Math.max(1, Math.ceil(list.length / cap));
   if (ui.page >= pages) ui.page = 0;
   const pageItems = list.slice(ui.page * cap, (ui.page + 1) * cap);
@@ -2085,11 +2027,9 @@ function renderTouchSaleUi() {
     return `<button class="touch-card ${hasImg ? 'with-image' : 'no-image'} ${lowStock ? 'stock-empty' : ''}" data-touch-prod="${item.id}" type="button">${img}<strong class="touch-card-title">${item.name}</strong><span class="touch-card-price">${money(item.price)}</span>${stockBadge}</button>`;
   };
   host.className = `touch-sales-layout cart-${cfg.cartPosition}`;
-  host.innerHTML = `<div class="touch-main"><div class="touch-toolbar">${ui.view === 'products' ? '<button id="touchBackToCats" class="secondary" type="button">Volver a categorías</button>' : '<span></span>'}<div class="touch-pager"><button id="touchPrevPage" class="secondary" type="button">◀</button><span>Página ${ui.page + 1}/${pages}</span><button id="touchNextPage" class="secondary" type="button">▶</button></div></div><div class="grid3"><label>Buscar producto<input id="touchSearchInput" type="text" value="${escapeHtml(ui.search || '')}" placeholder="Nombre" /></label><button id="touchSearchBtn" class="secondary" type="button">Buscar</button><button id="touchSearchClearBtn" class="secondary" type="button">Limpiar</button></div><div class="touch-grid" style="--touch-cols:${getTouchUiConfig().grid.split('x')[0]};">${pageItems.map(renderCard).join('')}</div></div><aside class="touch-cart"><h3>Lista de compras</h3><div class="touch-cart-items">${state.currentCart.length ? state.currentCart.map((i) => `<div class="touch-cart-item"><div><strong>${i.name}</strong><small>${money(i.price)} c/u · Costo ${money(Number(i.cost || 0))} · Total ${money(Number(i.finalSubtotal ?? (i.price*i.qty)))}</small></div><div class="touch-qty"><button data-touch-dec="${i.id}" type="button">-</button><span>${i.qty}</span><button data-touch-inc="${i.id}" type="button">+</button><button data-touch-tools="${i.id}" type="button">🛠</button><button data-touch-rm="${i.id}" type="button">✕</button></div></div>`).join('') : '<p>Sin productos añadidos.</p>'}</div><div class="touch-summary"><p>Subtotal: ${money(saleTotals().gross)}</p><p>Descuento: ${money(saleTotals().discount)}</p><p><strong>Total: ${money(saleTotals().final)}</strong></p></div><button id="touchProceedPayBtn" class="primary" type="button">Proceder con el pago</button><div class="grid2"><button id="touchQueueBtn" class="secondary" type="button">Añadir a la cola</button><button id="touchQueuedBtn" class="secondary" type="button">Ver pedidos pendientes</button></div><div class="touch-finance"><small>Total de caja: ${cashTotalBox?.textContent || money(0)}</small><small>Cambio final más efectivo del día: ${summaryFinalCash?.textContent || money(0)}</small><small>Total de QR del día: ${summaryFinalQr?.textContent || money(0)}</small></div></aside>`;
+  host.innerHTML = `<div class="touch-main"><div class="touch-toolbar">${ui.view === 'products' ? '<button id="touchBackToCats" class="secondary" type="button">Volver a categorías</button>' : '<span></span>'}<div class="touch-pager"><button id="touchPrevPage" class="secondary" type="button">◀</button><span>Página ${ui.page + 1}/${pages}</span><button id="touchNextPage" class="secondary" type="button">▶</button></div></div><div class="touch-grid" style="--touch-cols:${getTouchUiConfig().grid.split('x')[0]};">${pageItems.map(renderCard).join('')}</div></div><aside class="touch-cart"><h3>Lista de compras</h3><div class="touch-cart-items">${state.currentCart.length ? state.currentCart.map((i) => `<div class="touch-cart-item"><div><strong>${i.name}</strong><small>${money(i.price)} c/u · Costo ${money(Number(i.cost || 0))} · Total ${money(Number(i.finalSubtotal ?? (i.price*i.qty)))}</small></div><div class="touch-qty"><button data-touch-dec="${i.id}" type="button">-</button><span>${i.qty}</span><button data-touch-inc="${i.id}" type="button">+</button><button data-touch-tools="${i.id}" type="button">🛠</button><button data-touch-rm="${i.id}" type="button">✕</button></div></div>`).join('') : '<p>Sin productos añadidos.</p>'}</div><div class="touch-summary"><p>Subtotal: ${money(saleTotals().gross)}</p><p>Descuento: ${money(saleTotals().discount)}</p><p><strong>Total: ${money(saleTotals().final)}</strong></p></div><button id="touchProceedPayBtn" class="primary" type="button">Proceder con el pago</button><div class="grid2"><button id="touchQueueBtn" class="secondary" type="button">Añadir a la cola</button><button id="touchQueuedBtn" class="secondary" type="button">Ver pedidos pendientes</button></div><div class="touch-finance"><small>Total de caja: ${cashTotalBox?.textContent || money(0)}</small><small>Cambio final más efectivo del día: ${summaryFinalCash?.textContent || money(0)}</small><small>Total de QR del día: ${summaryFinalQr?.textContent || money(0)}</small></div></aside>`;
 
   host.querySelector('#touchBackToCats')?.addEventListener('click', () => { ui.view = 'categories'; ui.page = 0; renderTouchSaleUi(); });
-  host.querySelector('#touchSearchBtn')?.addEventListener('click', () => { ui.search = String(host.querySelector('#touchSearchInput')?.value || '').trim(); ui.page = 0; renderTouchSaleUi(); });
-  host.querySelector('#touchSearchClearBtn')?.addEventListener('click', () => { ui.search = ''; ui.page = 0; renderTouchSaleUi(); });
   host.querySelector('#touchPrevPage')?.addEventListener('click', () => { ui.page = (ui.page - 1 + pages) % pages; renderTouchSaleUi(); });
   host.querySelector('#touchNextPage')?.addEventListener('click', () => { ui.page = (ui.page + 1) % pages; renderTouchSaleUi(); });
   host.querySelectorAll('[data-touch-cat]').forEach((b) => b.addEventListener('click', () => { ui.view = 'products'; ui.category = b.dataset.touchCat || ''; ui.page = 0; renderTouchSaleUi(); }));
@@ -4053,6 +3993,7 @@ function renderSummary() {
     if (summaryFinalQr) summaryFinalQr.textContent = money(0);
     if (cashTotalBox) cashTotalBox.textContent = money(0);
     if (qrTotalBox) qrTotalBox.textContent = money(0);
+    renderDailySalesSummaryToggle();
     return;
   }
 
@@ -4094,6 +4035,60 @@ function renderSummary() {
   if (summaryInQr) summaryInQr.textContent = money(inQr);
   if (summaryFinalQr) summaryFinalQr.textContent = money(qrInTotal + inQr - outQr);
   if (qrTotalBox) qrTotalBox.textContent = money(qrInTotal + inQr - outQr);
+  renderDailySalesSummaryToggle();
+}
+
+function dailySalesRowsForSummary() {
+  const activeCashId = state.activeCashBoxId;
+  if (!activeCashId) return [];
+  const activeRows = salesForActiveCashBox().map((sale) => ({ ...sale, saleStatus: 'OK' }));
+  const annulledRows = (state.deletedSales || [])
+    .filter((sale) => sale?.cashBoxId === activeCashId)
+    .map((sale) => ({ ...sale, saleStatus: 'ANULADA' }));
+  const uniqueRows = new Map();
+  [...annulledRows, ...activeRows].forEach((sale) => {
+    const key = sale.id || `${sale.orderNumber}-${sale.createdAt}`;
+    uniqueRows.set(key, sale);
+  });
+  return [...uniqueRows.values()].sort((a, b) => Number(new Date(b.createdAt || 0)) - Number(new Date(a.createdAt || 0)));
+}
+
+function renderDailySalesSummaryToggle() {
+  const summaryPanel = document.getElementById('resumen');
+  if (!summaryPanel) return;
+  let host = document.getElementById('dailySalesSummaryCard');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'dailySalesSummaryCard';
+    host.className = 'card';
+    const summaryGrid = summaryPanel.querySelector('.summary-grid');
+    if (summaryGrid?.nextSibling) summaryPanel.insertBefore(host, summaryGrid.nextSibling);
+    else summaryPanel.appendChild(host);
+  }
+  host.innerHTML = `<button id="toggleDailySalesBtn" class="secondary" type="button">${summaryDailySalesVisible ? 'Ocultar' : 'Ver ventas del día'}</button><div id="dailySalesSummaryBody" class="${summaryDailySalesVisible ? '' : 'hidden'}"></div>`;
+  const body = host.querySelector('#dailySalesSummaryBody');
+  host.querySelector('#toggleDailySalesBtn')?.addEventListener('click', () => {
+    summaryDailySalesVisible = !summaryDailySalesVisible;
+    renderDailySalesSummaryToggle();
+  });
+  if (!summaryDailySalesVisible || !body) return;
+  const rows = dailySalesRowsForSummary();
+  const totals = rows.reduce((acc, sale) => {
+    if (isSaleAnnulled(sale) || sale.saleStatus === 'ANULADA') return acc;
+    acc.cash += Number(sale.breakdown?.cash || 0);
+    acc.qr += Number(sale.breakdown?.qr || 0);
+    acc.debt += Number(sale.debtAmount || 0);
+    return acc;
+  }, { cash: 0, qr: 0, debt: 0 });
+  body.innerHTML = `<table><thead><tr><th>Nro pedido</th><th>Fecha</th><th>Monto</th><th>Efectivo</th><th>QR</th><th>Deudas</th><th>Estado</th></tr></thead><tbody>${rows.length ? rows.map((sale) => {
+    const isAnnulled = isSaleAnnulled(sale) || sale.saleStatus === 'ANULADA';
+    const status = isAnnulled ? 'ANULADA' : 'OK';
+    return `<tr><td>${orderNumberLabel(sale.orderNumber)}</td><td>${new Date(sale.createdAt || Date.now()).toLocaleString()}</td><td>${money(sale.total || 0)}</td><td>${money(sale.breakdown?.cash || 0)}</td><td>${money(sale.breakdown?.qr || 0)}</td><td>${money(sale.debtAmount || 0)}</td><td>${status}</td></tr>`;
+  }).join('') : '<tr><td colspan="7">Sin ventas registradas en la caja actual.</td></tr>'}</tbody><tfoot><tr><th colspan="3">Totales (sin anuladas)</th><th>${money(totals.cash)}</th><th>${money(totals.qr)}</th><th>${money(totals.debt)}</th><th></th></tr></tfoot></table><div style="margin-top:.6rem;"><button id="hideDailySalesBtn" class="secondary" type="button">Ocultar</button></div>`;
+  body.querySelector('#hideDailySalesBtn')?.addEventListener('click', () => {
+    summaryDailySalesVisible = false;
+    renderDailySalesSummaryToggle();
+  });
 }
 
 
