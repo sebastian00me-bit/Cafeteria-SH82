@@ -2021,7 +2021,7 @@ function renderTouchSaleUi() {
   const cats = getOrderedCategories({ includeHidden: false }).filter((category) => state.products.some((p) => !p.hidden && p.category === category));
   state.touchUiState = state.touchUiState || { view: 'categories', category: '', page: 0 };
   const ui = state.touchUiState;
-  if (!cats.includes(ui.category)) { ui.category = ''; ui.view = 'categories'; ui.page = 0; }
+  if (ui.view === 'products' && !cats.includes(ui.category)) { ui.category = ''; ui.view = 'categories'; ui.page = 0; }
   const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0).sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
   const pages = Math.max(1, Math.ceil(list.length / cap));
   if (ui.page >= pages) ui.page = 0;
