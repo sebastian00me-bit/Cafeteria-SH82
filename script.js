@@ -1764,8 +1764,16 @@ function ensureSeedData() {
 
 
 function ensureProductStockDefaults() {
-  state.products = (state.products || []).map((p) => ({ ...p, stockCurrent: Number(p.stockCurrent || 0), cost: Math.max(0, Number(p.cost || 0)) }));
+  state.products = (state.products || []).map((p) => ({ ...p, stockCurrent: Number(p.stockCurrent || 0), cost: Math.max(0, Number(p.cost || 0)), stockMin: Math.max(0, Number(p.stockMin ?? appConfig.stockMinimo || 0)), stockEnabled: p.stockEnabled !== false }));
   state.stockWriteOffs = Array.isArray(state.stockWriteOffs) ? state.stockWriteOffs : [];
+}
+
+function isProductStockTracked(product) {
+  return isStockEnabled() && product?.stockEnabled !== false;
+}
+
+function productStockMin(product) {
+  return Math.max(0, Number(product?.stockMin ?? appConfig.stockMinimo || 0));
 }
 
 
@@ -1871,7 +1879,7 @@ function renderSaleSelectors() {
   const list = activeSaleCategory ? state.products.filter((p) => {
     if (p.hidden || p.category !== activeSaleCategory) return false;
     if (!isStockEnabled()) return true;
-    return Number(p.stockCurrent || 0) > 0;
+    return !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0;
   }) : [];
   saleCategorySelectors.innerHTML = `<div class="card grid4"><label>Producto<select id="catProductSel"><option value="">Selecciona un producto</option>${list.map((p) => { const stock = Number(p.stockCurrent || 0); const noStock = isStockEnabled() && stock <= 0; const lowStock = isStockEnabled() && stock > 0 && stock <= Number(appConfig.stockMinimo || 0); const suffix = isStockEnabled() ? (noStock ? ' (Sin stock)' : (lowStock ? ` (Stock = ${stock})` : '')) : ''; const style = isStockEnabled() ? (noStock ? 'color:#c62f2f;' : (lowStock ? 'color:#b26a00;' : '')) : ''; return `<option value="${p.id}" ${noStock ? 'disabled' : ''} style="${style}">${p.name}${suffix} · ${money(p.price)}</option>`; }).join('')}</select></label><label>Cantidad<input id="catQty" type="number" min="1" step="1" value="1" /></label><label>Subtotal<input id="catSub" type="text" readonly value="${money(0)}" /></label><button id="catAdd" class="primary" type="button">Añadir</button></div>`;
   const sel = $('catProductSel');
@@ -1887,8 +1895,8 @@ function renderSaleSelectors() {
     const p = state.products.find((x) => x.id === sel?.value);
     const q = Math.max(1, Number(qty?.value || 1));
     if (!p) return alert('Selecciona un producto.');
-    if (isStockEnabled() && q > Number(p.stockCurrent || 0)) return alert('Cantidad solicitada supera el stock disponible.');
-    if (isStockEnabled() && Array.isArray(p.combo) && p.combo.length) {
+    if (isProductStockTracked(p) && q > Number(p.stockCurrent || 0)) return alert('Cantidad solicitada supera el stock disponible.');
+    if (isProductStockTracked(p) && Array.isArray(p.combo) && p.combo.length) {
       const req = comboComponentRequirements(p, q);
       const missing = [...req.entries()].find(([componentId, neededQty]) => {
         const component = state.products.find((x) => x.id === componentId);
@@ -1998,7 +2006,7 @@ function renderTouchSaleUi() {
   state.touchUiState = state.touchUiState || { view: 'categories', category: '', page: 0 };
   const ui = state.touchUiState;
   if (!cats.includes(ui.category)) { ui.category = ''; ui.view = 'categories'; ui.page = 0; }
-  const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || Number(p.stockCurrent || 0) > 0);
+  const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0);
   const pages = Math.max(1, Math.ceil(list.length / cap));
   if (ui.page >= pages) ui.page = 0;
   const pageItems = list.slice(ui.page * cap, (ui.page + 1) * cap);
@@ -2013,7 +2021,7 @@ function renderTouchSaleUi() {
     const hasImg = Boolean(productSrc);
     const img = productSrc ? `<img class=\"touch-media\" src=\"${productSrc}\" alt=\"${item.name}\" loading=\"lazy\" />` : '';
     const stock = Number(item.stockCurrent || 0);
-    const lowStock = isStockEnabled() && stock > 0 && stock <= Number(appConfig.stockMinimo || 0);
+    const lowStock = isProductStockTracked(item) && stock > 0 && stock <= productStockMin(item);
     const stockBadge = lowStock ? `<small class=\"stock-warning\">Stock: ${stock}</small>` : '';
     return `<button class="touch-card ${hasImg ? 'with-image' : 'no-image'} ${lowStock ? 'stock-empty' : ''}" data-touch-prod="${item.id}" type="button">${img}<strong class="touch-card-title">${item.name}</strong><span class="touch-card-price">${money(item.price)}</span>${stockBadge}</button>`;
   };
@@ -2027,7 +2035,7 @@ function renderTouchSaleUi() {
   host.querySelectorAll('[data-touch-prod]').forEach((b) => b.addEventListener('click', () => {
     const p = state.products.find((x) => x.id === b.dataset.touchProd);
     if (!p) return;
-    if (isStockEnabled() && Number(p.stockCurrent || 0) <= 0) return alert('Producto sin stock disponible.');
+    if (isProductStockTracked(p) && Number(p.stockCurrent || 0) <= 0) return alert('Producto sin stock disponible.');
     const e = state.currentCart.find((i) => i.id === p.id);
     if (e) e.qty += 1; else state.currentCart.push({ id: p.id, name: p.name, cost: Number(p.cost || 0), price: Number(p.price || 0), qty: 1, discountPct: 0, finalSubtotal: Number(p.price || 0) });
     const item = state.currentCart.find((i) => i.id === p.id);
@@ -2039,7 +2047,7 @@ function renderTouchSaleUi() {
     renderCart();
     renderTouchSaleUi();
   }));
-  host.querySelectorAll('[data-touch-inc]').forEach((b) => b.addEventListener('click', () => { const i = state.currentCart.find((x) => x.id === b.dataset.touchInc); if (!i) return; const p = state.products.find((x) => x.id === i.id); if (isStockEnabled() && Number(i.qty || 0) >= Number(p?.stockCurrent || 0)) return alert('Stock insuficiente para agregar producto.'); i.qty += 1; i.finalSubtotal = i.price*i.qty - (i.price*i.qty*(i.discountPct||0)/100); renderCart(); renderTouchSaleUi(); }));
+  host.querySelectorAll('[data-touch-inc]').forEach((b) => b.addEventListener('click', () => { const i = state.currentCart.find((x) => x.id === b.dataset.touchInc); if (!i) return; const p = state.products.find((x) => x.id === i.id); if (isProductStockTracked(p) && Number(i.qty || 0) >= Number(p?.stockCurrent || 0)) return alert('Stock insuficiente para agregar producto.'); i.qty += 1; i.finalSubtotal = i.price*i.qty - (i.price*i.qty*(i.discountPct||0)/100); renderCart(); renderTouchSaleUi(); }));
   host.querySelectorAll('[data-touch-dec]').forEach((b) => b.addEventListener('click', () => { const i = state.currentCart.find((x) => x.id === b.dataset.touchDec); if (!i) return; i.qty = Math.max(1, i.qty-1); i.finalSubtotal = i.price*i.qty - (i.price*i.qty*(i.discountPct||0)/100); renderCart(); renderTouchSaleUi(); }));
   host.querySelectorAll('[data-touch-rm]').forEach((b) => b.addEventListener('click', () => { state.currentCart = state.currentCart.filter((x) => x.id !== b.dataset.touchRm); renderCart(); renderTouchSaleUi(); }));
   host.querySelectorAll('[data-touch-tools]').forEach((b) => b.addEventListener('click', () => openTouchItemTools(b.dataset.touchTools)));
@@ -2842,10 +2850,14 @@ function buildStatsFromSelectedClosings() {
     transfer: 0,
     qr: 0,
     others: 0,
+    debtPending: 0,
+    cost: 0,
+    profit: 0,
     expenses: 0,
     productsTotalQty: 0,
     productsMap: new Map(),
-    usersMap: new Map()
+    usersMap: new Map(),
+    pendingDebtorsMap: new Map()
   };
   selected.forEach((c) => {
     const agg = getClosingAggregates(c);
@@ -2855,8 +2867,19 @@ function buildStatsFromSelectedClosings() {
     stats.transfer += agg.transfer;
     stats.qr += agg.qr;
     stats.others += agg.others;
+    stats.cost += Number(agg.totalCost || 0);
+    stats.profit += Number(agg.totalProfit || 0);
     stats.expenses += agg.outTotal;
     stats.productsTotalQty += agg.qtyTotal;
+    stats.debtPending += Number(c.debtPending || 0);
+    (c.salesSnapshot || []).forEach((sale) => {
+      if (isSaleAnnulled(sale)) return;
+      if (!sale?.debtorId || Number(sale.debtAmount || 0) <= 0) return;
+      const person = state.people.find((p) => p.id === sale.debtorId);
+      const key = sale.debtorId;
+      if (!stats.pendingDebtorsMap.has(key)) stats.pendingDebtorsMap.set(key, { name: personFullName(person) || 'Persona', pending: 0 });
+      stats.pendingDebtorsMap.get(key).pending += Number(sale.debtAmount || 0);
+    });
     agg.products.forEach((p) => {
       if (!stats.productsMap.has(p.name)) stats.productsMap.set(p.name, { qty: 0, total: 0 });
       const row = stats.productsMap.get(p.name);
@@ -2875,6 +2898,7 @@ function buildStatsFromSelectedClosings() {
   stats.productsTopAmount = stats.products.slice().sort((a,b)=>b.total-a.total)[0] || null;
   stats.top5 = stats.products.slice().sort((a,b)=>b.qty-a.qty).slice(0,5);
   stats.users = [...stats.usersMap.entries()].map(([user,row])=>({user,...row}));
+  stats.pendingDebtors = [...stats.pendingDebtorsMap.values()].sort((a, b) => b.pending - a.pending);
   const payTotal = Math.max(1, stats.totalIncome);
   stats.paymentPct = {
     cash: (stats.cash / payTotal) * 100,
@@ -2889,7 +2913,7 @@ function buildStatsFromSelectedClosings() {
 function renderClosingsStatsOutput(stats) {
   const out = document.getElementById('closingsStatsOutput');
   if (!out) return;
-  out.innerHTML = `<div class="card"><h4>Resumen general</h4><p>Total ventas: ${stats.salesCount}</p><p>Total ingresos: ${money(stats.totalIncome)}</p><p>Total efectivo: ${money(stats.cash)}</p><p>Total transferencias: ${money(stats.transfer)}</p><p>Total QR: ${money(stats.qr)}</p><p>Total gastos: ${money(stats.expenses)}</p><p>Ticket promedio global: ${money(stats.avgTicket)}</p><p>Total productos vendidos: ${stats.productsTotalQty}</p><p>Cierres seleccionados: ${stats.count}</p></div><div class="card"><h4>Productos</h4><p>Producto más vendido: ${stats.productsTopQty ? `${stats.productsTopQty.name} (${stats.productsTopQty.qty})` : '-'}</p><p>Producto que más dinero generó: ${stats.productsTopAmount ? `${stats.productsTopAmount.name} (${money(stats.productsTopAmount.total)})` : '-'}</p><p>Total productos distintos vendidos: ${stats.products.length}</p><table><thead><tr><th>Top 5 productos</th><th>Cantidad</th><th>Total</th></tr></thead><tbody>${stats.top5.map((p)=>`<tr><td>${p.name}</td><td>${p.qty}</td><td>${money(p.total)}</td></tr>`).join('') || '<tr><td colspan="3">Sin datos</td></tr>'}</tbody></table></div><div class="card"><h4>Métodos de pago</h4><p>Efectivo: ${money(stats.cash)} (${stats.paymentPct.cash.toFixed(1)}%)</p><p>Transferencia: ${money(stats.transfer)} (${stats.paymentPct.transfer.toFixed(1)}%)</p><p>QR: ${money(stats.qr)} (${stats.paymentPct.qr.toFixed(1)}%)</p><p>Otros: ${money(stats.others)} (${stats.paymentPct.others.toFixed(1)}%)</p><p>Método más utilizado: ${stats.mostUsedMethod}</p></div><div class="card"><h4>Usuarios</h4><table><thead><tr><th>Usuario</th><th>Cierres</th><th>Total generado</th></tr></thead><tbody>${stats.users.map((u)=>`<tr><td>${u.user}</td><td>${u.closings}</td><td>${money(u.total)}</td></tr>`).join('') || '<tr><td colspan="3">Sin datos</td></tr>'}</tbody></table></div><div class="card"><h4>Estadísticas gráficas comparativas</h4><canvas id="closingsIncomeChart" width="760" height="220"></canvas><canvas id="closingsProductsChart" width="760" height="220"></canvas></div>`;
+  out.innerHTML = `<div class="card"><h4>Resumen general</h4><p>Total ventas: ${stats.salesCount}</p><p>Total ingresos: ${money(stats.totalIncome)}</p><p>Total costo: ${money(stats.cost)}</p><p>Total ganancia: ${money(stats.profit)}</p><p>Total efectivo: ${money(stats.cash)}</p><p>Total transferencias: ${money(stats.transfer)}</p><p>Total QR: ${money(stats.qr)}</p><p>Total deuda pendiente: ${money(stats.debtPending)}</p><p>Total gastos: ${money(stats.expenses)}</p><p>Ticket promedio global: ${money(stats.avgTicket)}</p><p>Total productos vendidos: ${stats.productsTotalQty}</p><p>Total productos distintos vendidos: ${stats.products.length}</p><p>Cierres seleccionados: ${stats.count}</p></div><div class="card"><h4>Productos</h4><p>Producto más vendido: ${stats.productsTopQty ? `${stats.productsTopQty.name} (${stats.productsTopQty.qty})` : '-'}</p><p>Producto que más dinero generó: ${stats.productsTopAmount ? `${stats.productsTopAmount.name} (${money(stats.productsTopAmount.total)})` : '-'}</p><table><thead><tr><th>Top 5 productos</th><th>Cantidad</th><th>Total</th></tr></thead><tbody>${stats.top5.map((p)=>`<tr><td>${p.name}</td><td>${p.qty}</td><td>${money(p.total)}</td></tr>`).join('') || '<tr><td colspan="3">Sin datos</td></tr>'}</tbody></table></div><div class="card"><h4>Métodos de pago</h4><p>Efectivo: ${money(stats.cash)} (${stats.paymentPct.cash.toFixed(1)}%)</p><p>Transferencia: ${money(stats.transfer)} (${stats.paymentPct.transfer.toFixed(1)}%)</p><p>QR: ${money(stats.qr)} (${stats.paymentPct.qr.toFixed(1)}%)</p><p>Otros: ${money(stats.others)} (${stats.paymentPct.others.toFixed(1)}%)</p><p>Método más utilizado: ${stats.mostUsedMethod}</p></div><div class="card"><h4>Personas con deuda pendiente</h4><table><thead><tr><th>Persona</th><th>Pendiente</th></tr></thead><tbody>${stats.pendingDebtors.map((d)=>`<tr><td>${d.name}</td><td>${money(d.pending)}</td></tr>`).join('') || '<tr><td colspan="2">Sin deudas pendientes.</td></tr>'}</tbody></table></div><div class="card"><h4>Usuarios</h4><table><thead><tr><th>Usuario</th><th>Cierres</th><th>Total generado</th></tr></thead><tbody>${stats.users.map((u)=>`<tr><td>${u.user}</td><td>${u.closings}</td><td>${money(u.total)}</td></tr>`).join('') || '<tr><td colspan="3">Sin datos</td></tr>'}</tbody></table></div><div class="card"><h4>Estadísticas gráficas comparativas</h4><canvas id="closingsIncomeChart" width="760" height="220"></canvas><canvas id="closingsProductsChart" width="760" height="220"></canvas></div>`;
   const drawBars = (canvasId, labels, values, color='#1f7a5c') => {
     const cv = document.getElementById(canvasId);
     if (!cv || !cv.getContext) return;
@@ -2932,7 +2956,7 @@ async function downloadClosingsStatsPdf() {
     doc.setFontSize(10);
     doc.text(`Cantidad de cierres seleccionados: ${st.count}`, 14, 34);
     doc.autoTable({ startY: 38, head: [['Resumen general', 'Valor']], body: [
-      ['Total ventas', String(st.salesCount)], ['Total ingresos', money(st.totalIncome)], ['Total efectivo', money(st.cash)], ['Total QR', money(st.qr)], ['Total gastos', money(st.expenses)], ['Ticket promedio global', money(st.avgTicket)], ['Total productos vendidos', String(st.productsTotalQty)]
+      ['Total ventas', String(st.salesCount)], ['Total ingresos', money(st.totalIncome)], ['Total costo', money(st.cost || 0)], ['Total ganancia', money(st.profit || 0)], ['Total efectivo', money(st.cash)], ['Total QR', money(st.qr)], ['Total deuda pendiente', money(st.debtPending || 0)], ['Total gastos', money(st.expenses)], ['Ticket promedio global', money(st.avgTicket)], ['Total productos vendidos', String(st.productsTotalQty)], ['Productos distintos vendidos', String(st.products?.length || 0)]
     ] });
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['Producto', 'Cantidad', 'Total']], body: st.top5.map((p)=>[p.name,String(p.qty),money(p.total)]) });
     doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['Método de pago', 'Monto']], body: [
@@ -2942,6 +2966,7 @@ async function downloadClosingsStatsPdf() {
     ]});
     doc.addPage();
     doc.autoTable({ startY: 12, head: [['Usuario', 'Cierres', 'Total generado']], body: st.users.map((u)=>[u.user,String(u.closings),money(u.total)]) });
+    doc.autoTable({ startY: doc.lastAutoTable.finalY + 4, head: [['Persona deudora', 'Pendiente']], body: (st.pendingDebtors || []).map((d) => [d.name, money(d.pending)]) });
     doc.save('estadisticas_cierres_seleccionados.pdf');
   } catch (error) {
     console.error('[pdf] stats', error);
@@ -3017,11 +3042,22 @@ function renderClosingDetails(closingId) {
   const closingHistoryRows = closingHistory.length
     ? closingHistory.map((sale) => `<tr style="${sale.status === 'ANULADA' ? 'color:#c1121f;font-weight:700;' : ''}"><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${sale.payment || '-'}</td><td>${money(sale.total)}</td><td>${sale.user || '-'}</td><td>${sale.statusLabel || sale.status}</td></tr>`).join('')
     : '<tr><td colspan="6">Sin historial de ventas.</td></tr>';
-  if (closingSummaryText) closingSummaryText.innerHTML = `<div class="card"><h4>SECCIÓN 1 – INFORMACIÓN GENERAL</h4><p>Número de cierre: ${String(closing.id || '-').slice(-8)}</p><p>Fecha de apertura: ${openAt.toLocaleDateString()}</p><p>Hora de apertura: ${openAt.toLocaleTimeString()}</p><p>Fecha de cierre: ${closeAt.toLocaleDateString()}</p><p>Hora de cierre: ${closeAt.toLocaleTimeString()}</p><p>Usuario que abrió: ${closing.usuario_apertura || '-'}</p><p>Usuario que cerró: ${closing.usuario_cierre || '-'}</p><p>Tiempo total de caja abierta: ${formatDurationMs(closeAt - openAt)}</p></div><div class="card"><h4>Detalle para enviar</h4><p>Cambio inicial: ${money(openingCash)}</p><p>Valor efectivo de ventas: ${money(totalCash)}</p><p>Valor QR de ventas: ${money(totalQr)}</p><p>Salida efectivo: ${money(outCash)}</p><p>Entrada efectivo: ${money(inCash)}</p><p>Salida QR: ${money(outQr)}</p><p>Entrada QR: ${money(inQr)}</p><p>Valor final en caja: ${money(totalInBox)}</p><p>Valor final descontando cambio inicial: ${money(realDelivered)}</p></div><div class="card"><h4>SECCIÓN 2 – RESUMEN FINANCIERO</h4><p>Inicio de caja: ${money(openingCash)}</p><p>Total ventas brutas: ${money(grossSales)}</p><p>Pagos de deuda cobrados: ${money(debtCollected)}</p><p>Total descuentos: ${money(totalDiscounts)}</p><p>Total ingresos netos: ${money((grossSales - totalDiscounts) + debtCollected)}</p><p>Total en efectivo: ${money(totalCash)}</p><p>Total QR: ${money(totalQr)}</p><p>Total salidas externas efectivo: ${money(outCash)}</p><p>Total salidas externas QR: ${money(outQr)}</p><p>Total entradas externas efectivo: ${money(inCash)}</p><p>Total entradas externas QR: ${money(inQr)}</p><p>Total efectivo final: ${money(totalCashFinal)}</p><p>Total QR final: ${money(totalQrFinal)}</p><p>Valor total en caja (incluye valor de caja): ${money(totalInBox)}</p><p>Valor efectivo real de venta entregado: ${money(realDelivered)}</p></div><div class="card"><h4>Productos vendidos</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Total</th></tr></thead><tbody>${agg.products.length ? agg.products.map((row) => `<tr><td>${row.name}</td><td>${row.qty}</td><td>${money(row.total)}</td></tr>`).join('') : '<tr><td colspan="3">Sin productos vendidos.</td></tr>'}</tbody></table></div><div class="card"><h4>HISTORIAL DE VENTAS DE CIERRE</h4><table><thead><tr><th>Fecha</th><th>Nro pedido</th><th>Método</th><th>Total</th><th>Usuario</th><th>Estado</th></tr></thead><tbody>${closingHistoryRows}</tbody></table></div><div class="card"><h4>SECCIÓN 3 – MÉTRICAS OPERATIVAS</h4><p>Cantidad total de ventas: ${closing.salesCount || sales.length}</p><p>Total productos vendidos: ${agg.qtyTotal}</p><p>Ticket promedio: ${money(agg.avgTicket)}</p><p>Venta más alta: ${money(agg.saleMax)}</p><p>Venta más baja: ${money(agg.saleMin)}</p><p>Ventas eliminadas: ${deletedCount} · Mov. caja: ${outflowCount} · Pagos deuda: ${debtPaymentsCount}</p></div><div class="card"><h4>Pagos de deuda</h4><table><thead><tr><th>Fecha pago</th><th>Persona</th><th>Detalle compra</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${debtPayments.map((p) => { const sale = saleRecordForPayment(p); const person = state.people.find((x) => x.id === p.debtorId); return `<tr><td>${new Date(p.paidAt).toLocaleString()}</td><td>${personFullName(person) || '-'}</td><td>${sale?.items?.map((i) => `${i.name} x${i.qty}`).join(', ') || '-'}</td><td>${p.method || '-'}</td><td>${money(p.amount || 0)}</td><td>${p.paidBy || '-'}</td></tr>`; }).join('') || '<tr><td colspan="6">Sin pagos de deuda.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de entradas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${entries.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin entradas.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de salidas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${exits.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin salidas.</td></tr>'}</tbody></table></div>`;
+  const historyRowsDetailed = closingHistory.length
+    ? closingHistory.map((sale) => {
+      const cashPart = Number(sale.breakdown?.cash || 0);
+      const qrPart = Number(sale.breakdown?.qr || 0);
+      const debtPart = Math.max(0, Number(sale.debtAmount || 0));
+      return `<tr style="${sale.status === 'ANULADA' ? 'color:#c1121f;font-weight:700;' : ''}"><td>${new Date(sale.createdAt || sale.deletedAt).toLocaleString()}</td><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${sale.payment || '-'}</td><td>${money(cashPart)}</td><td>${money(qrPart)}</td><td>${money(debtPart)}</td><td>${money(sale.total)}</td><td>${sale.user || '-'}</td><td>${sale.statusLabel || sale.status}</td></tr>`;
+    }).join('')
+    : '<tr><td colspan="9">Sin historial de ventas.</td></tr>';
+  const totalsHistory = closingHistory.filter((sale) => sale.status !== 'ANULADA').reduce((acc, sale) => {
+    acc.cash += Number(sale.breakdown?.cash || 0);
+    acc.qr += Number(sale.breakdown?.qr || 0);
+    acc.debt += Math.max(0, Number(sale.debtAmount || 0));
+    return acc;
+  }, { cash: 0, qr: 0, debt: 0 });
   const closingWriteOffs = Array.isArray(closing.stockWriteOffsSnapshot) ? closing.stockWriteOffsSnapshot : [];
-  if (closingSummaryText) {
-    closingSummaryText.insertAdjacentHTML('beforeend', `<div class="card"><h4>Productos vendidos (costos y ganancias)</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Costo</th><th>Ganancia</th><th>Total</th></tr></thead><tbody>${agg.products.length ? agg.products.map((row) => `<tr><td>${row.name}</td><td>${row.qty}</td><td>${money(row.cost || 0)}</td><td>${money(row.profit || 0)}</td><td>${money(row.total)}</td></tr>`).join('') : '<tr><td colspan="5">Sin productos vendidos.</td></tr>'}</tbody><tfoot><tr><th colspan="2">Totales</th><th>${money(agg.totalCost || 0)}</th><th>${money(agg.totalProfit || 0)}</th><th>${money(agg.totalRevenue || 0)}</th></tr></tfoot></table></div><div class="card"><h4>Productos dados de baja</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Motivo</th><th>Usuario</th><th>Fecha</th></tr></thead><tbody>${closingWriteOffs.length ? closingWriteOffs.map((row) => `<tr><td>${escapeHtml(row.productName || '-')}</td><td>${Number(row.qty || 0)}</td><td>${escapeHtml(row.reason || '-')}</td><td>${escapeHtml(row.user || '-')}</td><td>${new Date(row.createdAt || closing.closedAt).toLocaleString()}</td></tr>`).join('') : '<tr><td colspan="5">Sin productos dados de baja.</td></tr>'}</tbody></table></div>`);
-  }
+  if (closingSummaryText) closingSummaryText.innerHTML = `<div class="card"><h4>SECCIÓN 1 – INFORMACIÓN GENERAL</h4><p>Número de cierre: ${String(closing.id || '-').slice(-8)}</p><p>Fecha de apertura: ${openAt.toLocaleDateString()}</p><p>Hora de apertura: ${openAt.toLocaleTimeString()}</p><p>Fecha de cierre: ${closeAt.toLocaleDateString()}</p><p>Hora de cierre: ${closeAt.toLocaleTimeString()}</p><p>Usuario que abrió: ${closing.usuario_apertura || '-'}</p><p>Usuario que cerró: ${closing.usuario_cierre || '-'}</p><p>Tiempo total de caja abierta: ${formatDurationMs(closeAt - openAt)}</p></div><div class="card"><h4>SECCIÓN 2 – RESUMEN FINANCIERO</h4><p>Inicio de caja: ${money(openingCash)}</p><p>Total ventas brutas: ${money(grossSales)}</p><p>Pagos de deuda cobrados: ${money(debtCollected)}</p><p>Total descuentos: ${money(totalDiscounts)}</p><p>Total ingresos netos: ${money((grossSales - totalDiscounts) + debtCollected)}</p><p>Total en efectivo: ${money(totalCash)}</p><p>Total QR: ${money(totalQr)}</p><p>Total salidas externas efectivo: ${money(outCash)}</p><p>Total salidas externas QR: ${money(outQr)}</p><p>Total entradas externas efectivo: ${money(inCash)}</p><p>Total entradas externas QR: ${money(inQr)}</p><p>Total efectivo final: ${money(totalCashFinal)}</p><p>Total QR final: ${money(totalQrFinal)}</p><p>Valor total en caja (incluye valor de caja): ${money(totalInBox)}</p><p>Valor efectivo real de venta entregado: ${money(realDelivered)}</p></div><div class="card"><h4>HISTORIAL DE VENTAS DE CIERRE</h4><table><thead><tr><th>Fecha</th><th>Nro pedido</th><th>Método</th><th>Efectivo</th><th>QR</th><th>Deuda</th><th>Total</th><th>Usuario</th><th>Estado</th></tr></thead><tbody>${historyRowsDetailed}</tbody><tfoot><tr><th colspan="3">Totales (sin anuladas)</th><th>${money(totalsHistory.cash)}</th><th>${money(totalsHistory.qr)}</th><th>${money(totalsHistory.debt)}</th><th colspan="3"></th></tr></tfoot></table></div><div class="card"><h4>Productos vendidos (costos y ganancias)</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Costo</th><th>Ganancia</th><th>Total</th></tr></thead><tbody>${agg.products.length ? agg.products.map((row) => `<tr><td>${row.name}</td><td>${row.qty}</td><td>${money(row.cost || 0)}</td><td>${money(row.profit || 0)}</td><td>${money(row.total)}</td></tr>`).join('') : '<tr><td colspan="5">Sin productos vendidos.</td></tr>'}</tbody><tfoot><tr><th colspan="2">Totales</th><th>${money(agg.totalCost || 0)}</th><th>${money(agg.totalProfit || 0)}</th><th>${money(agg.totalRevenue || 0)}</th></tr></tfoot></table></div><div class="card"><h4>SECCIÓN 3 – MÉTRICAS OPERATIVAS</h4><p>Cantidad total de ventas: ${closing.salesCount || sales.length}</p><p>Total productos vendidos: ${agg.qtyTotal}</p><p>Ticket promedio: ${money(agg.avgTicket)}</p><p>Venta más alta: ${money(agg.saleMax)}</p><p>Venta más baja: ${money(agg.saleMin)}</p><p>Ventas eliminadas: ${deletedCount} · Mov. caja: ${outflowCount} · Pagos deuda: ${debtPaymentsCount}</p></div><div class="card"><h4>Productos dados de baja</h4><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Motivo</th><th>Usuario</th><th>Fecha</th></tr></thead><tbody>${closingWriteOffs.length ? closingWriteOffs.map((row) => `<tr><td>${escapeHtml(row.productName || '-')}</td><td>${Number(row.qty || 0)}</td><td>${escapeHtml(row.reason || '-')}</td><td>${escapeHtml(row.user || '-')}</td><td>${new Date(row.createdAt || closing.closedAt).toLocaleString()}</td></tr>`).join('') : '<tr><td colspan="5">Sin productos dados de baja.</td></tr>'}</tbody></table></div><div class="card"><h4>Pagos de deuda</h4><table><thead><tr><th>Fecha pago</th><th>Persona</th><th>Detalle compra</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${debtPayments.map((p) => { const sale = saleRecordForPayment(p); const person = state.people.find((x) => x.id === p.debtorId); return `<tr><td>${new Date(p.paidAt).toLocaleString()}</td><td>${personFullName(person) || '-'}</td><td>${sale?.items?.map((i) => `${i.name} x${i.qty}`).join(', ') || '-'}</td><td>${p.method || '-'}</td><td>${money(p.amount || 0)}</td><td>${p.paidBy || '-'}</td></tr>`; }).join('') || '<tr><td colspan="6">Sin pagos de deuda.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de entradas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${entries.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin entradas.</td></tr>'}</tbody></table></div><div class="card"><h4>Detalle de salidas</h4><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Método</th><th>Monto</th><th>Usuario</th></tr></thead><tbody>${exits.map((m) => `<tr><td>${new Date(m.createdAt).toLocaleString()}</td><td>${m.description || '-'}</td><td>${m.method || '-'}</td><td>${money(m.amount || 0)}</td><td>${m.user || '-'}</td></tr>`).join('') || '<tr><td colspan="5">Sin salidas.</td></tr>'}</tbody></table></div>`;
   if (closingSalesTable) closingSalesTable.innerHTML = sales.length ? sales.map((sale) => `<tr><td>${new Date(sale.createdAt).toLocaleString()}</td><td>#${orderNumberLabel(sale.orderNumber)}</td><td>${sale.payment}</td><td>${money(sale.total)}</td><td>${sale.user}</td></tr>`).join('') : '<tr><td colspan="5">Sin ventas.</td></tr>';
   if (closingProductsTable) {
     const aggProducts = agg.products;
@@ -3160,7 +3196,7 @@ function renderDebtors() {
     });
   }
   const renderDebtorDetails = (personId = '') => {
-    const sales = state.sales.filter((s) => s.debtorId === personId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
+    const sales = state.sales.filter((s) => s.debtorId === personId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado' && !isSaleAnnulled(s));
     const person = state.people.find((p) => p.id === personId);
     const total = sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
     state.activeDebtorId = personId;
@@ -3180,7 +3216,7 @@ function renderDebtors() {
   }
   const grouped = new Map();
   console.info('[debt][render]', { salesCount: state.sales?.length || 0, debtPaymentsCount: state.debtPayments?.length || 0 });
-  state.sales.filter((s) => Number(s.debtAmount || 0) > 0 && s.debtorId && s.paymentStatus !== 'realizado').forEach((s) => {
+  state.sales.filter((s) => Number(s.debtAmount || 0) > 0 && s.debtorId && s.paymentStatus !== 'realizado' && !isSaleAnnulled(s)).forEach((s) => {
     if (!grouped.has(s.debtorId)) grouped.set(s.debtorId, []);
     grouped.get(s.debtorId).push(s);
   });
@@ -3676,13 +3712,17 @@ function importProductsFromExcelFile(file) {
 
 function renderStockView() {
   if (!stockTable || !stockProductSelect) return;
+  const head = stockTable.closest('table')?.querySelector('thead tr');
+  if (head) head.innerHTML = '<th>PRODUCTO</th><th>CATEGORÍA</th><th>STOCK ACTUAL</th><th>STOCK MÍNIMO</th><th>ACTIVADO</th><th>ALERTA</th>';
   const enabled = Boolean(appConfig.stockActivo);
   stockProductSelect.innerHTML = (state.products || []).map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
   stockTable.innerHTML = (state.products || []).map((p) => {
-    const low = enabled && Number(p.stockCurrent || 0) <= Number(appConfig.stockMinimo || 0);
+    const min = productStockMin(p);
+    const tracked = p.stockEnabled !== false;
+    const low = enabled && tracked && Number(p.stockCurrent || 0) <= min;
     const alertText = low ? '⚠ Bajo stock' : '-';
     const alertClass = low ? 'stock-warning' : '';
-    return `<tr><td>${p.name}</td><td>${p.category || '-'}</td><td>${Number(p.stockCurrent || 0)}</td><td class="${alertClass}">${alertText}</td></tr>`;
+    return `<tr><td>${p.name}</td><td>${p.category || '-'}</td><td>${Number(p.stockCurrent || 0)}</td><td>${min}</td><td>${tracked ? 'Sí' : 'No'}</td><td class="${alertClass}">${alertText}</td></tr>`;
   }).join('');
 }
 
@@ -3700,8 +3740,8 @@ function addStockManually() {
 
 function exportStockToExcel() {
   if (!window.XLSX) return alert('No se pudo cargar XLSX.');
-  const rows = (state.products || []).map((p) => ({ PRODUCTO: String(p.name || '').trim(), 'CANTIDAD ACTUAL': Number(p.stockCurrent || 0) }));
-  const ws = XLSX.utils.json_to_sheet(rows, { header: ['PRODUCTO', 'CANTIDAD ACTUAL'] });
+  const rows = (state.products || []).map((p) => ({ PRODUCTO: String(p.name || '').trim(), 'CANTIDAD ACTUAL': Number(p.stockCurrent || 0), 'STOCK MÍNIMO': Number(p.stockMin ?? 0), ACTIVADO: p.stockEnabled !== false ? 1 : 0 }));
+  const ws = XLSX.utils.json_to_sheet(rows, { header: ['PRODUCTO', 'CANTIDAD ACTUAL', 'STOCK MÍNIMO', 'ACTIVADO'] });
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'STOCK');
   XLSX.writeFile(wb, 'stock_pos.xlsx');
@@ -3717,19 +3757,23 @@ function importStockFromExcelFile(file) {
       const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
       const headers = Object.keys(rows[0] || {});
       const expected = ['PRODUCTO', 'CANTIDAD ACTUAL'];
-      const valid = headers.length == expected.length && expected.every((h) => headers.includes(h));
-      if (!rows.length || !valid) return alert('Formato inválido. Use: PRODUCTO | CANTIDAD ACTUAL');
+      const valid = expected.every((h) => headers.includes(h));
+      if (!rows.length || !valid) return alert('Formato inválido. Use: PRODUCTO | CANTIDAD ACTUAL | STOCK MÍNIMO | ACTIVADO');
       let updated = 0;
       const errors = [];
       const map = new Map((state.products || []).map((p) => [normalizeProductName(p.name), p]));
       rows.forEach((row, idx) => {
         const name = String(row.PRODUCTO || '').trim();
         const add = Number(row['CANTIDAD ACTUAL']);
+        const minRaw = row['STOCK MÍNIMO'];
+        const enabledRaw = row.ACTIVADO;
         if (!name) return errors.push(`Fila ${idx + 2}: PRODUCTO vacío`);
         if (Number.isNaN(add)) return errors.push(`Fila ${idx + 2}: CANTIDAD ACTUAL inválida`);
         const prod = map.get(normalizeProductName(name));
         if (!prod) return errors.push(`Fila ${idx + 2}: producto no existe`);
         prod.stockCurrent = Number(prod.stockCurrent || 0) + add;
+        if (minRaw !== '' && minRaw !== undefined && minRaw !== null) prod.stockMin = Math.max(0, Number(minRaw || 0));
+        if (enabledRaw !== '' && enabledRaw !== undefined && enabledRaw !== null) prod.stockEnabled = Number(enabledRaw) === 1;
         updated += 1;
       });
       persist();
@@ -4431,8 +4475,8 @@ function openSaleEditModal(sale) {
     if (pid) {
       const p = state.products.find((x) => x.id === pid);
       if (p) {
-        if (isStockEnabled() && Number(p.stockCurrent || 0) < qty) { alert('Stock insuficiente para agregar producto.'); return; }
-        if (isStockEnabled() && Array.isArray(p.combo) && p.combo.length) {
+        if (isProductStockTracked(p) && Number(p.stockCurrent || 0) < qty) { alert('Stock insuficiente para agregar producto.'); return; }
+        if (isProductStockTracked(p) && Array.isArray(p.combo) && p.combo.length) {
           const req = comboComponentRequirements(p, qty);
           const missing = [...req.entries()].find(([componentId, neededQty]) => {
             const component = state.products.find((x) => x.id === componentId);
@@ -4444,8 +4488,8 @@ function openSaleEditModal(sale) {
             return;
           }
         }
-        if (isStockEnabled()) p.stockCurrent = Number(p.stockCurrent || 0) - qty;
-        if (isStockEnabled() && Array.isArray(p.combo) && p.combo.length) {
+        if (isProductStockTracked(p)) p.stockCurrent = Number(p.stockCurrent || 0) - qty;
+        if (isProductStockTracked(p) && Array.isArray(p.combo) && p.combo.length) {
           const req = comboComponentRequirements(p, qty);
           req.forEach((neededQty, componentId) => {
             const component = state.products.find((x) => x.id === componentId);
@@ -4519,8 +4563,8 @@ function openDebtPaymentModal({ saleIds = [], debtorId = '' } = {}) {
   overlay.innerHTML = `<div class="modal-card"><h3>Realizar pago</h3><div class="grid3"><label>Método<select id="dpMethod"><option value="efectivo">Efectivo</option><option value="qr">QR</option><option value="mixto">Mixto</option></select></label><label id="dpCashWrap" class="hidden">Efectivo<input id="dpCash" type="number" min="0" step="0.01" value="0" /></label><label id="dpQrWrap" class="hidden">QR<input id="dpQr" type="text" readonly value="Bs 0.00" /></label></div><div class="grid2"><button id="dpPayBtn" class="primary" type="button">Finalizar</button><button id="dpBackBtn" class="secondary" type="button">Atrás</button></div></div>`;
   document.body.appendChild(overlay);
   const getTargetSales = () => saleIds.length
-    ? state.sales.filter((s) => saleIds.includes(s.id) && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado')
-    : state.sales.filter((s) => s.debtorId === debtorId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado');
+    ? state.sales.filter((s) => saleIds.includes(s.id) && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado' && !isSaleAnnulled(s))
+    : state.sales.filter((s) => s.debtorId === debtorId && Number(s.debtAmount || 0) > 0 && s.paymentStatus !== 'realizado' && !isSaleAnnulled(s));
   const totalDebt = () => getTargetSales().reduce((a, s) => a + Number(s.debtAmount || 0), 0);
   const methodEl = document.getElementById('dpMethod');
   const cashEl = document.getElementById('dpCash');
@@ -5507,7 +5551,9 @@ async function registerSale() {
   if (payment === 'medio_pago') {
     debtorId = partialPersonSelect?.value || '';
     if (!debtorId) return setMsg(saleMessage, 'Selecciona una persona para registrar el medio pago.', false);
-    const paid = Math.max(0, Number(partialPaidAmount?.value || 0));
+    const paidRaw = Number(partialPaidAmount?.value || 0);
+    if (Number.isNaN(paidRaw) || paidRaw <= 0) return setMsg(saleMessage, 'Ingresa un monto pagado válido para medio pago.', false);
+    const paid = Math.min(Math.max(0, paidRaw), Number(totals.final || 0));
     const method = partialMethod?.value || 'efectivo';
     if (method === 'efectivo') breakdown.cash = paid;
     else breakdown.qr = paid;
@@ -5517,8 +5563,8 @@ async function registerSale() {
     for (const item of state.currentCart) {
       const p = state.products.find((x) => x.id === item.id);
       if (!p) continue;
-      if (Number(p.stockCurrent || 0) < Number(item.qty || 0)) return setMsg(saleMessage, `Stock insuficiente para ${item.name}.`, false);
-      if (Array.isArray(p.combo) && p.combo.length) {
+      if (isProductStockTracked(p) && Number(p.stockCurrent || 0) < Number(item.qty || 0)) return setMsg(saleMessage, `Stock insuficiente para ${item.name}.`, false);
+      if (isProductStockTracked(p) && Array.isArray(p.combo) && p.combo.length) {
         const req = comboComponentRequirements(p, item.qty);
         const missing = [...req.entries()].find(([componentId, neededQty]) => {
           const component = state.products.find((x) => x.id === componentId);
@@ -5549,10 +5595,11 @@ async function registerSale() {
     for (const item of state.currentCart) {
       const p = state.products.find((x) => x.id === item.id);
       if (!p) continue;
+      if (!isProductStockTracked(p)) continue;
       const next = Number(p.stockCurrent || 0) - Number(item.qty || 0);
       p.stockCurrent = next;
       console.info('[sale][stock]', { saleId: sale.id, productId: p.id, stockCurrent: next });
-      if (next <= Number(appConfig.stockMinimo || 0)) console.warn('[stock] Producto con stock mínimo', p.name, next);
+      if (next <= productStockMin(p)) console.warn('[stock] Producto con stock mínimo', p.name, next);
       if (Array.isArray(p.combo) && p.combo.length) {
         const req = comboComponentRequirements(p, item.qty);
         req.forEach((neededQty, componentId) => {
@@ -5560,7 +5607,7 @@ async function registerSale() {
           if (!component) return;
           const cNext = Number(component.stockCurrent || 0) - Number(neededQty || 0);
           component.stockCurrent = cNext;
-          if (cNext <= Number(appConfig.stockMinimo || 0)) console.warn('[stock] Producto con stock mínimo', component.name, cNext);
+          if (cNext <= productStockMin(component)) console.warn('[stock] Producto con stock mínimo', component.name, cNext);
         });
       }
     }
@@ -5710,8 +5757,23 @@ function openQueuedOrdersModal() {
 
 function renderStockPage() {
   if (!stockPageTable) return;
+  const head = stockPageTable.closest('table')?.querySelector('thead tr');
+  if (head) head.innerHTML = '<th>Activo</th><th>Producto</th><th>Stock actual</th><th>Stock mínimo</th><th>Acción</th>';
   if (stockPageProductSelect) stockPageProductSelect.innerHTML = (state.products || []).map((p) => `<option value=\"${p.id}\">${p.name}</option>`).join('');
-  stockPageTable.innerHTML = (state.products || []).map((p) => `<tr><td>${p.name}</td><td>${Number(p.stockCurrent || 0)}</td><td><button class="secondary" data-stock-writeoff="${p.id}" type="button">Dar de baja</button> <button class="secondary" data-stock-clear="${p.id}" type="button">Vaciar stock</button></td></tr>`).join('');
+  stockPageTable.innerHTML = (state.products || []).map((p) => `<tr><td><input type="checkbox" data-stock-toggle="${p.id}" ${p.stockEnabled !== false ? 'checked' : ''} /></td><td>${p.name}</td><td>${Number(p.stockCurrent || 0)}</td><td>${Number(p.stockMin ?? 0)}</td><td><button class="secondary" data-stock-edit-min="${p.id}" type="button">Editar mínimo</button> <button class="secondary" data-stock-writeoff="${p.id}" type="button">Dar de baja</button> <button class="secondary" data-stock-clear="${p.id}" type="button">Vaciar stock</button></td></tr>`).join('');
+  if (!document.getElementById('activateAllStocksBtn')) {
+    const btn = document.createElement('button');
+    btn.id = 'activateAllStocksBtn';
+    btn.className = 'secondary';
+    btn.type = 'button';
+    btn.textContent = 'Activar todos los stocks';
+    stockPageImportBtn?.insertAdjacentElement('beforebegin', btn);
+    btn.addEventListener('click', () => {
+      state.products.forEach((p) => { p.stockEnabled = true; });
+      persist({ sync: false });
+      renderStockPage();
+    });
+  }
 }
 
 function showStockPage() {
@@ -6724,8 +6786,8 @@ function wireEvents() {
     if (!item) return;
     if (t.dataset.act === 'qty') {
       const requested = Math.max(1, Number(t.value || 1));
-      if (isStockEnabled()) {
-        const product = state.products.find((x) => x.id === item.id);
+      const product = state.products.find((x) => x.id === item.id);
+      if (isProductStockTracked(product)) {
         if (requested > Number(product?.stockCurrent || 0)) {
           alert('Cantidad supera el stock disponible.');
           t.value = String(item.qty || 1);
@@ -6815,6 +6877,10 @@ function wireEvents() {
       sale.deletedBy = state.currentUser?.username || '-';
       sale.deletedAt = annulledAt;
       sale.annulledAt = annulledAt;
+      if (Number(sale.debtAmount || 0) > 0) {
+        sale.debtAmount = 0;
+        sale.paymentStatus = 'anulado';
+      }
       sale.modifiedAt = Date.now();
       const deletedSnapshot = { ...sale, saleStatus: 'ANULADA', deletedAt: annulledAt, deletedBy: state.currentUser?.username || '-', annulledDebtPayments: annulCount };
       state.deletedSales = (state.deletedSales || []).filter((x) => x.id !== sale.id);
@@ -6822,7 +6888,7 @@ function wireEvents() {
       if (isStockEnabled()) {
         (sale.items || []).forEach((it) => {
           const p = state.products.find((x) => x.id === it.id || normalizeProductName(x.name) === normalizeProductName(it.name));
-          if (p) {
+          if (p && isProductStockTracked(p)) {
             p.stockCurrent = Number(p.stockCurrent || 0) + Number(it.qty || 0);
             if (Array.isArray(p.combo) && p.combo.length) {
               const req = comboComponentRequirements(p, it.qty);
@@ -7032,6 +7098,16 @@ function wireEvents() {
   });
 
   stockPageTable?.addEventListener('click', (e) => {
+    const editMinBtn = e.target.closest('button[data-stock-edit-min]');
+    if (editMinBtn) {
+      const product = state.products.find((p) => p.id === editMinBtn.dataset.stockEditMin);
+      if (!product) return;
+      const next = Number(prompt(`Stock mínimo para ${product.name}`, String(product.stockMin ?? 0)) || product.stockMin || 0);
+      product.stockMin = Math.max(0, next);
+      persist({ sync: false });
+      renderStockPage();
+      return;
+    }
     const lowBtn = e.target.closest('button[data-stock-writeoff]');
     if (lowBtn) {
       const product = state.products.find((p) => p.id === lowBtn.dataset.stockWriteoff);
@@ -7048,6 +7124,14 @@ function wireEvents() {
     renderProducts();
     renderSaleSelectors();
     renderStockPage();
+  });
+  stockPageTable?.addEventListener('change', (e) => {
+    const cb = e.target.closest('input[data-stock-toggle]');
+    if (!cb) return;
+    const product = state.products.find((p) => p.id === cb.dataset.stockToggle);
+    if (!product) return;
+    product.stockEnabled = Boolean(cb.checked);
+    persist({ sync: false });
   });
   clearAllStockBtn?.addEventListener('click', () => {
     if (!confirm('¿Vaciar TODO el stock? Esta acción no se puede deshacer.')) return;
