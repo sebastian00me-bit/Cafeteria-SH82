@@ -260,6 +260,7 @@ const summaryTotal = $('summaryTotal');
 const summaryCashDetail = $('summaryCashDetail');
 const summaryQrDetail = $('summaryQrDetail');
 const summaryBox = $('summaryBox');
+const summaryDebtDay = $('summaryDebtDay');
 const summaryDebt = $('summaryDebt');
 const summaryCash = $('summaryCash');
 const summaryBoxInCash = $('summaryBoxInCash');
@@ -1887,7 +1888,7 @@ function renderSaleSelectors() {
     if (p.hidden || p.category !== activeSaleCategory) return false;
     if (!isStockEnabled()) return true;
     return !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0;
-  }) : [];
+  }).sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0)) : [];
   saleCategorySelectors.innerHTML = `<div class="card grid4"><label>Producto<select id="catProductSel"><option value="">Selecciona un producto</option>${list.map((p) => { const stock = Number(p.stockCurrent || 0); const noStock = isStockEnabled() && stock <= 0; const lowStock = isStockEnabled() && stock > 0 && stock <= Number(appConfig.stockMinimo || 0); const suffix = isStockEnabled() ? (noStock ? ' (Sin stock)' : (lowStock ? ` (Stock = ${stock})` : '')) : ''; const style = isStockEnabled() ? (noStock ? 'color:#c62f2f;' : (lowStock ? 'color:#b26a00;' : '')) : ''; return `<option value="${p.id}" ${noStock ? 'disabled' : ''} style="${style}">${p.name}${suffix} · ${money(p.price)}</option>`; }).join('')}</select></label><label>Cantidad<input id="catQty" type="number" min="1" step="1" value="1" /></label><label>Subtotal<input id="catSub" type="text" readonly value="${money(0)}" /></label><button id="catAdd" class="primary" type="button">Añadir</button></div>`;
   const sel = $('catProductSel');
   const qty = $('catQty');
@@ -2013,7 +2014,7 @@ function renderTouchSaleUi() {
   state.touchUiState = state.touchUiState || { view: 'categories', category: '', page: 0 };
   const ui = state.touchUiState;
   if (!cats.includes(ui.category)) { ui.category = ''; ui.view = 'categories'; ui.page = 0; }
-  const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0);
+  const list = ui.view === 'categories' ? cats : state.products.filter((p) => !p.hidden && p.category === ui.category).filter((p) => !isStockEnabled() || !isProductStockTracked(p) || Number(p.stockCurrent || 0) > 0).sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
   const pages = Math.max(1, Math.ceil(list.length / cap));
   if (ui.page >= pages) ui.page = 0;
   const pageItems = list.slice(ui.page * cap, (ui.page + 1) * cap);
@@ -4005,6 +4006,7 @@ function renderSummary() {
     if (summaryCashDetail) summaryCashDetail.textContent = money(0);
     if (summaryQrDetail) summaryQrDetail.textContent = money(0);
     if (summaryBox) summaryBox.textContent = money(0);
+    if (summaryDebtDay) summaryDebtDay.textContent = money(0);
     if (summaryDebt) summaryDebt.textContent = money(0);
     if (summaryCash) summaryCash.textContent = money(0);
     if (summaryBoxInCash) summaryBoxInCash.textContent = money(0);
@@ -4031,6 +4033,7 @@ function renderSummary() {
   const debtQr = debtPayments.reduce((a, p) => a + Number(p.qrAmount || (p.method === 'qr' ? p.amount : 0) || 0), 0);
   const cashInTotal = cashSales + debtCash;
   const qrInTotal = qrSales + debtQr;
+  const debtDay = sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
   const debtPending = state.sales.reduce((a, s) => a + Number(s.debtAmount || 0), 0);
   const outflows = (state.outflows || []).filter((o) => o.cashBoxId === state.activeCashBoxId);
   const outCash = outflows.filter((o) => o.direction === 'salida' && o.method === 'efectivo').reduce((a, o) => a + Number(o.amount || 0), 0);
@@ -4046,6 +4049,7 @@ function renderSummary() {
   if (summaryCashDetail) summaryCashDetail.textContent = money(cashInTotal);
   if (summaryQrDetail) summaryQrDetail.textContent = money(qrInTotal);
   if (summaryBox) summaryBox.textContent = money(opening);
+  if (summaryDebtDay) summaryDebtDay.textContent = money(debtDay);
   if (summaryDebt) summaryDebt.textContent = money(debtPending);
   if (summaryCash) summaryCash.textContent = money(cashInTotal);
   if (summaryBoxInCash) summaryBoxInCash.textContent = money(opening);
